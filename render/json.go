@@ -53,22 +53,23 @@ type jsonReport struct {
 }
 
 type jsonProject struct {
-	Repo         string           `json:"repo"`
-	Branch       string           `json:"branch"`
-	MasterBranch string           `json:"master_branch"`
-	LatestRun    jsonLatestRun    `json:"latest_run"`
-	Summary      jsonSummary      `json:"summary"`
-	FailedTests  []jsonFailedTest `json:"failed_tests"`
+	Repo                     string            `json:"repo"`
+	Branch                   string            `json:"branch"`
+	MasterBranch             string            `json:"master_branch"`
+	LatestRun                jsonRunWithTests  `json:"latest_run"`
+	LatestRunWithTestResults *jsonRunWithTests `json:"latest_run_with_test_results,omitempty"`
+	Summary                  jsonSummary       `json:"summary"`
 }
 
-type jsonLatestRun struct {
-	RunID       int    `json:"run_id"`
-	SHA         string `json:"sha"`
-	CommitTitle string `json:"commit_title"`
-	Timestamp   string `json:"timestamp"`
-	Conclusion  string `json:"conclusion"`
-	Link        string `json:"link"`
-	TotalFailed int    `json:"total_failed"`
+type jsonRunWithTests struct {
+	RunID       int              `json:"run_id"`
+	SHA         string           `json:"sha"`
+	CommitTitle string           `json:"commit_title"`
+	Timestamp   string           `json:"timestamp"`
+	Conclusion  string           `json:"conclusion"`
+	Link        string           `json:"link"`
+	TotalFailed int              `json:"total_failed"`
+	FailedTests []jsonFailedTest `json:"failed_tests"`
 }
 
 type jsonSummary struct {
@@ -122,7 +123,6 @@ type jsonFlakyInfo struct {
 func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 	cr := r.Collect
 	ar := r.Analyze
-	er := r.Enrich
 
 	stableFailing := ar.Behavior.StableFailing
 	fixedTests := ar.Behavior.FixedTests
@@ -139,7 +139,6 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 		allBehavior[k] = v
 	}
 
-	// Latest run info
 	orderedKeys := cr.OrderedKeys
 	var latestKey string
 	if len(orderedKeys) > 0 {
@@ -148,8 +147,74 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 	latestMeta := cr.Meta[latestKey]
 	latestFailed := cr.Summary[latestKey]
 
-	// Build per-test entries
-	testNames := latestFailed.ToSlice()
+	latestRun := jsonRunWithTests{
+		RunID:       latestMeta.RunID,
+		SHA:         latestMeta.SHA,
+		CommitTitle: latestMeta.Title,
+		Timestamp:   latestMeta.Timestamp,
+		Conclusion:  latestMeta.Conclusion,
+		Link:        latestMeta.Link,
+		TotalFailed: latestFailed.Len(),
+		FailedTests: buildFailedTests(r, latestFailed, allBehavior, latestMeta),
+	}
+
+	project := jsonProject{
+		Repo:         r.Repo,
+		Branch:       r.Branch,
+		MasterBranch: cfg.Analysis.MasterBranch,
+		LatestRun:    latestRun,
+		Summary: jsonSummary{
+			TotalRunsAnalyzed:  ar.Stats.TotalRuns,
+			UniqueFailedTests:  ar.Stats.UniqueFailedTests,
+			MasterFailedTests:  ar.Stats.MasterFailedTests,
+			NewFailures:        ar.Stats.NewFailures,
+			StableFailingCount: len(stableFailing),
+			FixedCount:         len(fixedTests),
+			FlakyCount:         len(flakyTests),
+		},
+	}
+
+	// If the latest run failed before tests ran, find the last run with test results
+	if latestFailed.Len() == 0 && latestMeta.Conclusion == "failure" {
+		for i := len(orderedKeys) - 2; i >= 0; i-- {
+			key := orderedKeys[i]
+			failed := cr.Summary[key]
+			if failed.Len() > 0 {
+				meta := cr.Meta[key]
+				project.LatestRunWithTestResults = &jsonRunWithTests{
+					RunID:       meta.RunID,
+					SHA:         meta.SHA,
+					CommitTitle: meta.Title,
+					Timestamp:   meta.Timestamp,
+					Conclusion:  meta.Conclusion,
+					Link:        meta.Link,
+					TotalFailed: failed.Len(),
+					FailedTests: buildFailedTests(r, failed, allBehavior, meta),
+				}
+				break
+			}
+		}
+	}
+
+	return project
+}
+
+func buildFailedTests(
+	r RepoResult,
+	failedSet internal.StringSet,
+	allBehavior map[string]*analyze.TestBehavior,
+	runMeta internal.RunMeta,
+) []jsonFailedTest {
+	cr := r.Collect
+	ar := r.Analyze
+	er := r.Enrich
+
+	stableFailing := ar.Behavior.StableFailing
+	fixedTests := ar.Behavior.FixedTests
+	flakyTests := ar.Behavior.FlakyTests
+	orderedKeys := cr.OrderedKeys
+
+	testNames := failedSet.ToSlice()
 	sort.Strings(testNames)
 
 	var failedTests []jsonFailedTest
@@ -185,10 +250,10 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 		}
 		if entry.ProbableCause == nil && behavior == nil {
 			entry.ProbableCause = &jsonProbableCause{
-				SHA:          latestMeta.SHA,
-				CommitTitle:  latestMeta.Title,
-				Timestamp:    latestMeta.Timestamp,
-				RunLink:      latestMeta.Link,
+				SHA:          runMeta.SHA,
+				CommitTitle:  runMeta.Title,
+				Timestamp:    runMeta.Timestamp,
+				RunLink:      runMeta.Link,
 				StreakLength: 1,
 			}
 		}
@@ -225,30 +290,7 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 		failedTests = append(failedTests, entry)
 	}
 
-	return jsonProject{
-		Repo:         r.Repo,
-		Branch:       r.Branch,
-		MasterBranch: cfg.Analysis.MasterBranch,
-		LatestRun: jsonLatestRun{
-			RunID:       latestMeta.RunID,
-			SHA:         latestMeta.SHA,
-			CommitTitle: latestMeta.Title,
-			Timestamp:   latestMeta.Timestamp,
-			Conclusion:  latestMeta.Conclusion,
-			Link:        latestMeta.Link,
-			TotalFailed: latestFailed.Len(),
-		},
-		Summary: jsonSummary{
-			TotalRunsAnalyzed:  ar.Stats.TotalRuns,
-			UniqueFailedTests:  ar.Stats.UniqueFailedTests,
-			MasterFailedTests:  ar.Stats.MasterFailedTests,
-			NewFailures:        ar.Stats.NewFailures,
-			StableFailingCount: len(stableFailing),
-			FixedCount:         len(fixedTests),
-			FlakyCount:         len(flakyTests),
-		},
-		FailedTests: failedTests,
-	}
+	return failedTests
 }
 
 func extractError(items []internal.TestDetail) string {
