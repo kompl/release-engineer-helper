@@ -58,7 +58,7 @@ func Run(token string, cfg *config.Config, repo, branch string, onProgress func(
 	}
 
 	// --- Build summary, meta, allTestDetails ---
-	result := buildSummary(gh, owner, repo, validRuns)
+	result := buildSummary(gh, repo, validRuns)
 	result.MasterFailed = masterFailed
 	result.AllBranchRunIDs = allBranchRunIDs
 
@@ -69,6 +69,7 @@ func Run(token string, cfg *config.Config, repo, branch string, onProgress func(
 type processedRun struct {
 	run     ghWorkflowRun
 	details map[string][]internal.TestDetail
+	title   string
 }
 
 // candidateRun wraps a workflow run with its global ordering index.
@@ -81,6 +82,7 @@ type candidateRun struct {
 type runResult struct {
 	candidate candidateRun
 	details   map[string][]internal.TestDetail
+	title     string
 	valid     bool
 }
 
@@ -189,7 +191,7 @@ func collectValidRuns(
 
 	runs := make([]processedRun, len(validResults))
 	for i, r := range validResults {
-		runs[i] = processedRun{run: r.candidate.run, details: r.details}
+		runs[i] = processedRun{run: r.candidate.run, details: r.details, title: r.title}
 	}
 
 	fmt.Printf("  [collect] Collected %d valid runs, %d total branch run IDs\n", len(runs), len(allRunIDs))
@@ -203,7 +205,11 @@ func processCandidate(
 	resultCh chan<- runResult,
 ) {
 	details, hasNoTests := loadOrExtract(cache, logExt, artExt, gh, owner, repo, c.run.ID, forceRefresh)
-	resultCh <- runResult{candidate: c, details: details, valid: !hasNoTests}
+	title := ""
+	if !hasNoTests {
+		title = gh.GetCommitTitle(repo, c.run.HeadSHA)
+	}
+	resultCh <- runResult{candidate: c, details: details, title: title, valid: !hasNoTests}
 }
 
 func loadOrExtract(
@@ -269,7 +275,7 @@ func getMasterFailed(
 	return result
 }
 
-func buildSummary(gh *GitHubClient, owner, repo string, runs []processedRun) *CollectResult {
+func buildSummary(gh *GitHubClient, repo string, runs []processedRun) *CollectResult {
 	result := &CollectResult{
 		Summary:        make(map[string]internal.StringSet),
 		Meta:           make(map[string]internal.RunMeta),
@@ -284,7 +290,7 @@ func buildSummary(gh *GitHubClient, owner, repo string, runs []processedRun) *Co
 		runID := run.ID
 		compositeKey := fmt.Sprintf("%s_%d", sha, runID)
 
-		title := gh.GetCommitTitle(repo, sha)
+		title := pr.title
 		ts := parseTimestamp(run.RunStartedAt, run.CreatedAt)
 		link := gh.RunURL(repo, runID)
 
