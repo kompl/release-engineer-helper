@@ -10,3 +10,4 @@ __pycache__
 *.log
 repo_branches.json
 config.yaml
+.agents
