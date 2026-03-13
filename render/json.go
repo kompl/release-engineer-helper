@@ -297,7 +297,15 @@ func extractError(items []internal.TestDetail) string {
 	if len(items) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(items[0].Context)
+	msg := strings.TrimSpace(items[0].Context)
+	// Collapse multiline error into a single line
+	msg = strings.Join(strings.Fields(msg), " ")
+	// Truncate to keep JSON readable (max ~300 chars)
+	const maxLen = 300
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "…"
+	}
+	return msg
 }
 
 func extractProject(items []internal.TestDetail) string {
