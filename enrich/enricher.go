@@ -5,11 +5,10 @@ import (
 
 	"release-engineer-helper/v0.1/analyze"
 	"release-engineer-helper/v0.1/collect"
-	"release-engineer-helper/v0.1/config"
 )
 
 // RunForRepo executes the Enrich phase for a specific repo.
-func RunForRepo(cfg *config.Config, cr *collect.CollectResult, ar *analyze.AnalyzeResult, repo string) *EnrichResult {
+func RunForRepo(cache *collect.Cache, owner string, cr *collect.CollectResult, ar *analyze.AnalyzeResult, repo string) *EnrichResult {
 	result := &EnrichResult{
 		StableSince: make(map[string]collect.StableSinceInfo),
 	}
@@ -20,19 +19,13 @@ func RunForRepo(cfg *config.Config, cr *collect.CollectResult, ar *analyze.Analy
 
 	fmt.Printf("  [enrich] Looking up history for %d stable-failing tests in MongoDB...\n", len(ar.Behavior.StableFailing))
 
-	cache, err := collect.NewCache(cfg.Mongo.URI, cfg.Mongo.DB, cfg.Mongo.Collection)
-	if err != nil {
-		fmt.Printf("  [enrich] MongoDB connection error: %v\n", err)
-		return result
-	}
-
 	testNames := make([]string, 0, len(ar.Behavior.StableFailing))
 	for name := range ar.Behavior.StableFailing {
 		testNames = append(testNames, name)
 	}
 
 	result.StableSince = cache.FindEarliestRunWithTests(
-		cfg.GitHub.Owner,
+		owner,
 		repo,
 		testNames,
 		cr.AllBranchRunIDs,

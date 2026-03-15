@@ -17,14 +17,8 @@ const maxPages = 10
 
 // Run executes the Collect phase for a single repo/branch.
 // onProgress is called each time a valid run is collected (may be nil).
-func Run(token string, cfg *config.Config, repo, branch string, onProgress func()) *CollectResult {
+func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, onProgress func()) *CollectResult {
 	gh := NewGitHubClient(token, cfg.GitHub.Owner, cfg.GitHub.WorkflowFile)
-
-	cache, err := NewCache(cfg.Mongo.URI, cfg.Mongo.DB, cfg.Mongo.Collection)
-	if err != nil {
-		log.Printf("[collect] MongoDB connection error: %v", err)
-		return nil
-	}
 
 	logExtractor := NewLogExtractor()
 	artifactExtractor := NewArtifactExtractor(gh)
@@ -327,9 +321,9 @@ func buildSummary(gh *GitHubClient, repo string, runs []processedRun) *CollectRe
 
 		failedSet := internal.NewStringSet(failedOrder...)
 
-		// Merge test details
+		// Merge test details (append, not overwrite — same test may fail in multiple runs)
 		for testName, items := range pr.details {
-			result.AllTestDetails[testName] = items
+			result.AllTestDetails[testName] = append(result.AllTestDetails[testName], items...)
 		}
 
 		result.Summary[compositeKey] = failedSet

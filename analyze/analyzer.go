@@ -82,8 +82,8 @@ func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 			if cr.Summary[key].Contains(t) {
 				states[i] = TestFailed
 			} else if usePresence {
-				namesForRun := cr.AllTestKeys[key]
-				if namesForRun.Len() > 0 && !namesForRun.Contains(bk) {
+				namesForRun, hasData := cr.AllTestKeys[key]
+				if hasData && !namesForRun.Contains(bk) {
 					states[i] = TestNotPresent
 				} else {
 					states[i] = TestPassed
@@ -165,7 +165,9 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 	} else if *firstFailIdx == *lastFailIdx {
 		behaviorType = "single_failure"
 	} else if lastPresentIdx >= 0 && *lastFailIdx == lastPresentIdx {
-		if isStableFailingFrom(states, *firstFailIdx) {
+		// Find the start of the last continuous failure block (ignoring NotPresent gaps)
+		streakStart := findLastStreakStart(states)
+		if isStableFailingFrom(states, streakStart) {
 			behaviorType = "stable_failing"
 		} else {
 			behaviorType = "flaky"
@@ -269,6 +271,27 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 		NextPRLink:     nextPRLink,
 		NextCommitInfo: nextCommitInfo,
 	}
+}
+
+// findLastStreakStart finds the start of the last continuous failure block,
+// treating NotPresent as transparent (not breaking the streak).
+// Walks backward from the end, skipping NotPresent and Failed, stopping at Passed.
+func findLastStreakStart(states []TestState) int {
+	if len(states) == 0 {
+		return 0
+	}
+	start := len(states) - 1
+	for start > 0 {
+		if states[start-1] == TestPassed {
+			break
+		}
+		start--
+	}
+	// Skip leading NotPresent to find the first actual Failed
+	for start < len(states) && states[start] == TestNotPresent {
+		start++
+	}
+	return start
 }
 
 // isStableFailingFrom checks if the test fails in all present runs from startIdx to the end.

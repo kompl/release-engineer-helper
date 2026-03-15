@@ -32,7 +32,8 @@ type cachedDocument struct {
 
 // Cache provides MongoDB-backed storage for parsed test results.
 type Cache struct {
-	coll *mongo.Collection
+	client *mongo.Client
+	coll   *mongo.Collection
 }
 
 // NewCache creates a Cache connected to MongoDB.
@@ -58,7 +59,14 @@ func NewCache(uri, dbName, collName string) (*Cache, error) {
 	}
 	_, _ = coll.Indexes().CreateOne(ctx, indexModel)
 
-	return &Cache{coll: coll}, nil
+	return &Cache{client: client, coll: coll}, nil
+}
+
+// Close disconnects the underlying MongoDB client.
+func (c *Cache) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return c.client.Disconnect(ctx)
 }
 
 // CacheEntry holds the data loaded from cache.

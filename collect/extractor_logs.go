@@ -48,6 +48,7 @@ func (le *LogExtractor) ParseZip(zipBytes []byte) (map[string][]internal.TestDet
 
 	failed := make(map[string][]internal.TestDetail)
 	hasNoTests := false
+	foundTestResults := false
 	orderPos := 0
 
 	for _, f := range r.File {
@@ -91,6 +92,7 @@ func (le *LogExtractor) ParseZip(zipBytes []byte) (map[string][]internal.TestDet
 				continue
 			}
 
+			foundTestResults = true
 			projectName := statMatch[1]
 			failedCount, _ := strconv.Atoi(statMatch[5])
 
@@ -180,7 +182,9 @@ func (le *LogExtractor) ParseZip(zipBytes []byte) (map[string][]internal.TestDet
 		}
 	}
 
-	hasNoTests = len(failed) == 0
+	if !foundTestResults {
+		hasNoTests = true
+	}
 	return failed, hasNoTests
 }
 

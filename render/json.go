@@ -246,8 +246,8 @@ func buildFailedTests(
 			entry.Pattern = behavior.Pattern
 		}
 
-		// Probable cause
-		if behavior != nil {
+		// Probable cause (only for stable_failing — flaky patterns have no meaningful streak)
+		if behavior != nil && behavior.Type == "stable_failing" {
 			streak := findStreakStart(behavior.Pattern, orderedKeys, cr.Meta)
 			if streak != nil {
 				entry.ProbableCause = streak
@@ -308,8 +308,9 @@ func extractError(items []internal.TestDetail) string {
 	msg = strings.Join(strings.Fields(msg), " ")
 	// Truncate to keep JSON readable (max ~300 chars)
 	const maxLen = 300
-	if len(msg) > maxLen {
-		msg = msg[:maxLen] + "…"
+	runes := []rune(msg)
+	if len(runes) > maxLen {
+		msg = string(runes[:maxLen]) + "…"
 	}
 	return msg
 }

@@ -137,6 +137,12 @@ func main() {
 	// ========== Collect → Analyze → Enrich per repo/branch ==========
 	fmt.Println("\n=== Collect → Analyze → Enrich ===")
 
+	cache, err := collect.NewCache(cfg.Mongo.URI, cfg.Mongo.DB, cfg.Mongo.Collection)
+	if err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	}
+	defer cache.Close()
+
 	// Calculate max name width for alignment
 	nameWidth := 0
 	for repo, branches := range repoBranches {
@@ -187,7 +193,7 @@ func main() {
 				defer wg.Done()
 
 				// Collect — spinner animates, text shows progress bar
-				cr := collect.Run(token, cfg, repo, branch, func() {
+				cr := collect.Run(token, cfg, cache, repo, branch, func() {
 					state.incr()
 				})
 
@@ -203,7 +209,7 @@ func main() {
 
 				// Enrich — spinner animates, text shows "Enrich"
 				state.set("enrich")
-				er := enrich.RunForRepo(cfg, cr, ar, repo)
+				er := enrich.RunForRepo(cache, cfg.GitHub.Owner, cr, ar, repo)
 
 				// Done — spinner clears, text shows "✓"
 				state.set("done")

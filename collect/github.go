@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,30 +32,53 @@ func NewGitHubClient(token, owner, workflowFile string) *GitHubClient {
 }
 
 // get performs a GET request to the GitHub API with JSON accept header.
+// Retries up to 3 times on rate limit (HTTP 403 with X-RateLimit-Remaining: 0).
 func (g *GitHubClient) get(url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "token "+g.token)
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	const maxRetries = 3
 
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Authorization", "token "+g.token)
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		resp, err := g.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("do request: %w", err)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read body: %w", err)
+		}
+
+		if resp.StatusCode == 403 && resp.Header.Get("X-RateLimit-Remaining") == "0" && attempt < maxRetries {
+			resetStr := resp.Header.Get("X-RateLimit-Reset")
+			sleepDur := time.Duration(30*(attempt+1)) * time.Second
+			if resetStr != "" {
+				if resetUnix, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
+					resetTime := time.Unix(resetUnix, 0)
+					if wait := time.Until(resetTime); wait > 0 && wait < 15*time.Minute {
+						sleepDur = wait + time.Second
+					}
+				}
+			}
+			log.Printf("[github] Rate limited, waiting %v before retry %d/%d", sleepDur, attempt+1, maxRetries)
+			time.Sleep(sleepDur)
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
+		}
+
+		return body, nil
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
-	}
-
-	return body, nil
+	return nil, fmt.Errorf("exhausted retries for %s", url)
 }
 
 // getZip performs a GET request for binary content (zip downloads).
@@ -74,6 +98,7 @@ func (g *GitHubClient) getZip(url string) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 415 || resp.StatusCode == 406 {
+		io.Copy(io.Discard, resp.Body) // drain body for connection reuse
 		// Retry with octet-stream
 		req2, _ := http.NewRequest("GET", url, nil)
 		req2.Header.Set("Authorization", "token "+g.token)
