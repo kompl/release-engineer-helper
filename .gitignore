@@ -11,3 +11,5 @@ __pycache__
 repo_branches.json
 config.yaml
 .agents
+bambai
+.claude

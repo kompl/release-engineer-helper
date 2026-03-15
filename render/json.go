@@ -116,8 +116,9 @@ type jsonFirstSeen struct {
 }
 
 type jsonFlakyInfo struct {
-	FailCount int `json:"fail_count"`
-	TotalRuns int `json:"total_runs"`
+	FailCount    int `json:"fail_count"`
+	TotalRuns    int `json:"total_runs"`
+	PresentCount int `json:"present_count"` // runs where test actually existed
 }
 
 func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
@@ -234,7 +235,11 @@ func buildFailedTests(
 
 		behavior := allBehavior[testName]
 		if behavior != nil {
-			total := max(behavior.TotalRuns, 1)
+			total := behavior.PresentCount
+			if total == 0 {
+				total = behavior.TotalRuns
+			}
+			total = max(total, 1)
 			rate := float64(behavior.FailCount) / float64(total) * 100
 			roundedRate := float64(int(rate*10)) / 10
 			entry.FailRatePct = &roundedRate
@@ -282,8 +287,9 @@ func buildFailedTests(
 		// Flaky info
 		if fi, ok := flakyTests[testName]; ok {
 			entry.FlakyInfo = &jsonFlakyInfo{
-				FailCount: fi.FailCount,
-				TotalRuns: fi.TotalRuns,
+				FailCount:    fi.FailCount,
+				TotalRuns:    fi.TotalRuns,
+				PresentCount: fi.PresentCount,
 			}
 		}
 
@@ -343,28 +349,46 @@ func findStreakStart(pattern string, orderedKeys []string, meta map[string]inter
 
 	redCircle, _ := utf8.DecodeRuneInString("🔴")
 	greenCircle, _ := utf8.DecodeRuneInString("🟢")
+	whiteCircle, _ := utf8.DecodeRuneInString("⚪")
 	_ = greenCircle
 
 	// Count emoji positions (each emoji is one "logical" position)
 	var positions []rune
 	for _, r := range runes {
-		if r == redCircle || r == greenCircle {
+		if r == redCircle || r == greenCircle || r == whiteCircle {
 			positions = append(positions, r)
 		}
 	}
 
-	if len(positions) == 0 || positions[len(positions)-1] != redCircle {
+	// Find last non-⚪ symbol; stable_failing patterns may have trailing ⚪
+	lastNonWhite := len(positions) - 1
+	for lastNonWhite >= 0 && positions[lastNonWhite] == whiteCircle {
+		lastNonWhite--
+	}
+	if lastNonWhite < 0 || positions[lastNonWhite] != redCircle {
 		return nil
 	}
 
-	// Walk backwards to find streak start
+	// Walk backwards through 🔴 and ⚪, then advance idx to the first 🔴
 	idx := len(positions) - 1
-	for idx > 0 && positions[idx-1] == redCircle {
+	for idx > 0 && (positions[idx-1] == redCircle || positions[idx-1] == whiteCircle) {
 		idx--
+	}
+	// Skip past any leading ⚪ to find the actual first 🔴
+	for idx < len(positions) && positions[idx] == whiteCircle {
+		idx++
 	}
 
 	if idx >= len(orderedKeys) {
 		return nil
+	}
+
+	// Count only 🔴 in the streak (exclude ⚪)
+	streakLength := 0
+	for i := idx; i < len(positions); i++ {
+		if positions[i] == redCircle {
+			streakLength++
+		}
 	}
 
 	key := orderedKeys[idx]
@@ -374,6 +398,6 @@ func findStreakStart(pattern string, orderedKeys []string, meta map[string]inter
 		CommitTitle:  runMeta.Title,
 		Timestamp:    runMeta.Timestamp,
 		RunLink:      runMeta.Link,
-		StreakLength: len(positions) - idx,
+		StreakLength: streakLength,
 	}
 }

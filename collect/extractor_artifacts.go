@@ -23,17 +23,24 @@ func NewArtifactExtractor(gh *GitHubClient) *ArtifactExtractor {
 	return &ArtifactExtractor{gh: gh}
 }
 
+// ExtractResult holds the results of artifact extraction.
+type ExtractResult struct {
+	Details     map[string][]internal.TestDetail
+	AllTestKeys []string // base keys (classname::name) for ALL tests, including passed
+	HasNoTests  bool
+}
+
 // Extract downloads and parses test-reports-* artifacts for a run.
-func (ae *ArtifactExtractor) Extract(repo string, runID int) (map[string][]internal.TestDetail, bool) {
+func (ae *ArtifactExtractor) Extract(repo string, runID int) *ExtractResult {
 	artifacts, err := ae.gh.ListRunArtifacts(repo, runID)
 	if err != nil {
 		log.Printf("[artifacts] Error listing artifacts for run %d: %v", runID, err)
-		return nil, true
+		return &ExtractResult{HasNoTests: true}
 	}
 
 	if len(artifacts) == 0 {
 		fmt.Printf("  [artifacts] No artifacts for run %d\n", runID)
-		return nil, true
+		return &ExtractResult{HasNoTests: true}
 	}
 
 	// Filter test-reports-* artifacts
@@ -46,10 +53,11 @@ func (ae *ArtifactExtractor) Extract(repo string, runID int) (map[string][]inter
 
 	if len(reportArtifacts) == 0 {
 		fmt.Printf("  [artifacts] No test-reports-* artifacts for run %d\n", runID)
-		return nil, true
+		return &ExtractResult{HasNoTests: true}
 	}
 
 	combined := make(map[string][]internal.TestDetail)
+	allKeysSet := make(map[string]struct{})
 	foundAnyJUnit := false
 	globalPos := 0
 	firstSeenOrder := make(map[string]int)
@@ -66,17 +74,20 @@ func (ae *ArtifactExtractor) Extract(repo string, runID int) (map[string][]inter
 			continue
 		}
 
-		parsed, hasJUnit := ae.parseJUnitZip(zipBytes, project)
-		if hasJUnit {
+		parsed := ae.parseJUnitZip(zipBytes, project)
+		if parsed.hasJUnit {
 			foundAnyJUnit = true
 		}
 
-		for k, v := range parsed {
+		for k, v := range parsed.failed {
 			if _, seen := firstSeenOrder[k]; !seen {
 				firstSeenOrder[k] = globalPos
 				globalPos++
 			}
 			combined[k] = append(combined[k], v...)
+		}
+		for _, key := range parsed.allTestKeys {
+			allKeysSet[key] = struct{}{}
 		}
 	}
 
@@ -84,7 +95,17 @@ func (ae *ArtifactExtractor) Extract(repo string, runID int) (map[string][]inter
 	if hasNoTests {
 		fmt.Printf("  [artifacts] No JUnit reports found in artifacts for run %d\n", runID)
 	}
-	return combined, hasNoTests
+
+	allTestKeys := make([]string, 0, len(allKeysSet))
+	for k := range allKeysSet {
+		allTestKeys = append(allTestKeys, k)
+	}
+
+	return &ExtractResult{
+		Details:     combined,
+		AllTestKeys: allTestKeys,
+		HasNoTests:  hasNoTests,
+	}
 }
 
 // junitTestSuites represents a JUnit XML file root (can be <testsuites> or <testsuite>).
@@ -111,14 +132,22 @@ type junitFailure struct {
 	Text    string `xml:",chardata"`
 }
 
-func (ae *ArtifactExtractor) parseJUnitZip(zipBytes []byte, project string) (map[string][]internal.TestDetail, bool) {
+// junitZipResult holds the results of parsing a JUnit zip.
+type junitZipResult struct {
+	failed      map[string][]internal.TestDetail
+	allTestKeys []string // base keys (classname::name) for ALL tests
+	hasJUnit    bool
+}
+
+func (ae *ArtifactExtractor) parseJUnitZip(zipBytes []byte, project string) junitZipResult {
 	r, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
 		log.Println("[artifacts] Bad zip for junit artifact")
-		return nil, false
+		return junitZipResult{}
 	}
 
 	failed := make(map[string][]internal.TestDetail)
+	allKeysSet := make(map[string]struct{})
 	foundAnyJUnit := false
 	seenOrder := make(map[string]int)
 	localPos := 0
@@ -142,24 +171,15 @@ func (ae *ArtifactExtractor) parseJUnitZip(zipBytes []byte, project string) (map
 		if parsed.hasAnyTestCase {
 			foundAnyJUnit = true
 		}
-		if len(parsed.failed) == 0 {
-			continue
+
+		// Collect ALL test keys (passed + failed + skipped)
+		for _, key := range parsed.allTestKeys {
+			allKeysSet[key] = struct{}{}
 		}
 
+		// Process failed tests for details
 		for _, tc := range parsed.failed {
-			classname := strings.TrimSpace(tc.ClassName)
-			name := strings.TrimSpace(tc.Name)
-
-			var testKey string
-			if classname != "" && name != "" {
-				testKey = classname + "::" + name
-			} else if name != "" {
-				testKey = name
-			} else if classname != "" {
-				testKey = classname
-			} else {
-				testKey = "unknown"
-			}
+			testKey := buildTestKey(tc)
 
 			if _, seen := seenOrder[testKey]; !seen {
 				seenOrder[testKey] = localPos
@@ -185,23 +205,44 @@ func (ae *ArtifactExtractor) parseJUnitZip(zipBytes []byte, project string) (map
 		}
 	}
 
-	return failed, foundAnyJUnit
+	allTestKeys := make([]string, 0, len(allKeysSet))
+	for k := range allKeysSet {
+		allTestKeys = append(allTestKeys, k)
+	}
+
+	return junitZipResult{
+		failed:      failed,
+		allTestKeys: allTestKeys,
+		hasJUnit:    foundAnyJUnit,
+	}
 }
 
-// junitParseResult holds both the "has any testcase" flag and the failed subset.
+// buildTestKey creates a base test key from classname and name.
+func buildTestKey(tc junitTestCase) string {
+	classname := strings.TrimSpace(tc.ClassName)
+	name := strings.TrimSpace(tc.Name)
+
+	if classname != "" && name != "" {
+		return classname + "::" + name
+	} else if name != "" {
+		return name
+	} else if classname != "" {
+		return classname
+	}
+	return "unknown"
+}
+
+// junitParseResult holds base keys of all tests and the failed subset.
 type junitParseResult struct {
 	hasAnyTestCase bool
-	failed         []junitTestCase
+	allTestKeys    []string        // base keys (classname::name) for ALL tests
+	failed         []junitTestCase // only failed, for error details
 }
 
 // parseJUnitXML extracts all testcases from a JUnit XML, handling both
 // <testsuites> and <testsuite> root elements.
-// Returns whether any testcase was found (even passing) and the failed ones.
-// In Python, found_any_junit is set to True when ANY <testcase> exists,
-// even if all tests pass. This is important: a run with all passing tests
-// is valid (has_no_tests=false), not "no tests".
+// Returns base keys of all tests and the failed subset with details.
 func parseJUnitXML(data []byte) junitParseResult {
-	// Try parsing as <testsuites>
 	var suites junitTestSuites
 	if err := xml.Unmarshal(data, &suites); err != nil {
 		return junitParseResult{}
@@ -222,15 +263,18 @@ func parseJUnitXML(data []byte) junitParseResult {
 	}
 	collectFromSuites(suites.TestSuites)
 
-	// Filter to only failed/errored testcases
+	// Build base keys for ALL tests and filter failed
+	allTestKeys := make([]string, 0, len(allCases))
 	var failed []junitTestCase
 	for _, tc := range allCases {
+		allTestKeys = append(allTestKeys, buildTestKey(tc))
 		if len(tc.Failures) > 0 || len(tc.Errors) > 0 {
 			failed = append(failed, tc)
 		}
 	}
 	return junitParseResult{
 		hasAnyTestCase: len(allCases) > 0,
+		allTestKeys:    allTestKeys,
 		failed:         failed,
 	}
 }

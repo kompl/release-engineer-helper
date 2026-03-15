@@ -223,8 +223,12 @@ func buildFlakyRun(title string, tests map[string]*analyze.TestBehavior) htmlRun
 	var leaves []htmlLeaf
 	for testName, info := range tests {
 		failRate := 0.0
-		if info.TotalRuns > 0 {
-			failRate = float64(info.FailCount) / float64(info.TotalRuns) * 100
+		denom := info.PresentCount
+		if denom == 0 {
+			denom = info.TotalRuns
+		}
+		if denom > 0 {
+			failRate = float64(info.FailCount) / float64(denom) * 100
 		}
 		label := fmt.Sprintf("%s (паттерн: %s, падает %.1f%% времени)", testName, info.Pattern, failRate)
 		leaves = append(leaves, htmlLeaf{

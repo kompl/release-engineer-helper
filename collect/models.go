@@ -7,6 +7,7 @@ type CollectResult struct {
 	Summary         map[string]internal.StringSet    // compositeKey → set of failed test names
 	Meta            map[string]internal.RunMeta      // compositeKey → run metadata
 	AllTestDetails  map[string][]internal.TestDetail // testName → detail items
+	AllTestKeys     map[string]internal.StringSet    // compositeKey → set of ALL test base keys (passed+failed)
 	MasterFailed    internal.StringSet               // tests failing in master
 	AllBranchRunIDs []int                            // ALL completed run IDs for the branch
 	OrderedKeys     []string                         // composite keys in chronological order (oldest first)

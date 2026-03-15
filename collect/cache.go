@@ -18,7 +18,7 @@ type cachedTestEntry struct {
 	Items    []internal.TestDetail `bson:"items"`
 }
 
-// cachedDocument matches the Python schema.
+// cachedDocument matches the storage schema.
 type cachedDocument struct {
 	Schema      int               `bson:"schema"`
 	Owner       string            `bson:"owner"`
@@ -27,6 +27,7 @@ type cachedDocument struct {
 	CreatedAt   string            `bson:"created_at"`
 	HasNoTests  bool              `bson:"has_no_tests"`
 	DetailsList []cachedTestEntry `bson:"details_list"`
+	AllTestKeys []string          `bson:"all_test_keys,omitempty"` // schema 3: base keys of ALL tests
 }
 
 // Cache provides MongoDB-backed storage for parsed test results.
@@ -60,9 +61,16 @@ func NewCache(uri, dbName, collName string) (*Cache, error) {
 	return &Cache{coll: coll}, nil
 }
 
+// CacheEntry holds the data loaded from cache.
+type CacheEntry struct {
+	Details     map[string][]internal.TestDetail
+	AllTestKeys []string
+	HasNoTests  bool
+}
+
 // Load retrieves cached parsed results for a run.
-// Returns (details, hasNoTests, found).
-func (c *Cache) Load(owner, repo string, runID int) (map[string][]internal.TestDetail, bool, bool) {
+// Returns (entry, found).
+func (c *Cache) Load(owner, repo string, runID int) (*CacheEntry, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -70,26 +78,36 @@ func (c *Cache) Load(owner, repo string, runID int) (map[string][]internal.TestD
 	var doc cachedDocument
 	err := c.coll.FindOne(ctx, filter).Decode(&doc)
 	if err != nil {
-		return nil, false, false
+		return nil, false
 	}
 
-	details := decodeDetails(doc.DetailsList)
-	return details, doc.HasNoTests, true
+	// Schema < 3 doesn't have AllTestKeys — treat as cache miss
+	// so that re-extraction populates the new field.
+	if doc.Schema < 3 && !doc.HasNoTests {
+		return nil, false
+	}
+
+	return &CacheEntry{
+		Details:     decodeDetails(doc.DetailsList),
+		AllTestKeys: doc.AllTestKeys,
+		HasNoTests:  doc.HasNoTests,
+	}, true
 }
 
 // Save stores parsed results for a run (upsert).
-func (c *Cache) Save(owner, repo string, runID int, details map[string][]internal.TestDetail, hasNoTests bool) error {
+func (c *Cache) Save(owner, repo string, runID int, details map[string][]internal.TestDetail, allTestKeys []string, hasNoTests bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	doc := cachedDocument{
-		Schema:      2,
+		Schema:      3,
 		Owner:       owner,
 		Repo:        repo,
 		RunID:       runID,
 		CreatedAt:   time.Now().Format(time.RFC3339),
 		HasNoTests:  hasNoTests,
 		DetailsList: encodeDetails(details),
+		AllTestKeys: allTestKeys,
 	}
 
 	filter := bson.M{"owner": owner, "repo": repo, "run_id": runID}

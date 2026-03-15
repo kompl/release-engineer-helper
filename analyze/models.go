@@ -1,6 +1,17 @@
 package analyze
 
-import "release-engineer-helper/v0.1/internal"
+import (
+	"release-engineer-helper/v0.1/internal"
+)
+
+// TestState represents the state of a test in a specific run.
+type TestState int8
+
+const (
+	TestNotPresent TestState = -1 // test didn't exist in this run
+	TestPassed     TestState = 0  // test ran and passed
+	TestFailed     TestState = 1  // test ran and failed
+)
 
 // AnalyzeResult is the output of the Analyze phase.
 type AnalyzeResult struct {
@@ -21,11 +32,12 @@ type TestBehavior struct {
 	Type           string                `json:"type"` // stable_failing, fixed, flaky, single_failure
 	TestName       string                `json:"test_name"`
 	TotalRuns      int                   `json:"total_runs"`
+	PresentCount   int                   `json:"present_count"` // runs where test actually existed
 	FailCount      int                   `json:"fail_count"`
 	FirstFailRun   *int                  `json:"first_fail_run"` // 1-based, nil if never failed
 	LastFailRun    *int                  `json:"last_fail_run"`  // 1-based, nil if never failed
 	FailedRuns     []FailedRunInfo       `json:"failed_runs"`
-	Pattern        string                `json:"pattern"` // e.g. "🔴🟢🔴🔴"
+	Pattern        string                `json:"pattern"` // 🔴=fail, 🟢=pass, ⚪=not present
 	Details        []internal.TestDetail `json:"details"`
 	NextPRLink     string                `json:"next_pr_link,omitempty"`
 	NextCommitInfo *CommitInfo           `json:"next_commit_info,omitempty"`

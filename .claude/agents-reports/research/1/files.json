@@ -1,0 +1,109 @@
+{
+  "files": [
+    {
+      "path": "main.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md"]
+    },
+    {
+      "path": "go.mod",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md"]
+    },
+    {
+      "path": "config/config.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "save-logs-config.md"]
+    },
+    {
+      "path": "config.sample.yaml",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "save-logs-config.md"]
+    },
+    {
+      "path": "config.yaml",
+      "git_hash": "eb38f9b",
+      "docs": ["save-logs-config.md"]
+    },
+    {
+      "path": "parse/logparser.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md"]
+    },
+    {
+      "path": "internal/models.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md"]
+    },
+    {
+      "path": "collect/models.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "test-pattern-analysis.md"]
+    },
+    {
+      "path": "collect/collector.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "test-pattern-analysis.md", "save-logs-config.md"]
+    },
+    {
+      "path": "collect/github.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "test-pattern-analysis.md", "save-logs-config.md"]
+    },
+    {
+      "path": "collect/cache.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md", "test-pattern-analysis.md"]
+    },
+    {
+      "path": "collect/extractor_artifacts.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md", "test-pattern-analysis.md"]
+    },
+    {
+      "path": "collect/extractor_logs.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "test-pattern-analysis.md", "save-logs-config.md"]
+    },
+    {
+      "path": "analyze/analyzer.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "test-pattern-analysis.md"]
+    },
+    {
+      "path": "analyze/models.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "test-pattern-analysis.md"]
+    },
+    {
+      "path": "enrich/enricher.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md"]
+    },
+    {
+      "path": "enrich/models.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md"]
+    },
+    {
+      "path": "render/renderer.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md", "test-pattern-analysis.md"]
+    },
+    {
+      "path": "render/html.go",
+      "git_hash": "e10deb8",
+      "docs": ["architecture.md"]
+    },
+    {
+      "path": "render/json.go",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "test-pattern-analysis.md"]
+    },
+    {
+      "path": "README.md",
+      "git_hash": "eb38f9b",
+      "docs": ["architecture.md", "save-logs-config.md"]
+    }
+  ]
+}

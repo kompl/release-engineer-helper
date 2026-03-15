@@ -25,8 +25,31 @@ func Run(cr *collect.CollectResult) *AnalyzeResult {
 	}
 }
 
+// baseTestKey extracts the base key (classname::name) from a full test name
+// that may include " | error_message".
+func baseTestKey(testName string) string {
+	if idx := strings.Index(testName, " | "); idx >= 0 {
+		return testName[:idx]
+	}
+	return testName
+}
+
+// hasAllTestKeys returns true if AllTestKeys data is available for at least one run.
+// When true, the analyzer uses 3-state logic (failed/passed/not_present).
+// For runs without AllTestKeys data (e.g. old cache entries), the per-run guard
+// `namesForRun.Len() > 0` in analyzeTestBehavior falls back to TestPassed,
+// preserving backward-compatible behavior.
+func hasAllTestKeys(cr *collect.CollectResult) bool {
+	for _, names := range cr.AllTestKeys {
+		if names.Len() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // analyzeTestBehavior builds a state matrix for each test across all runs
-// and classifies behavior. Exact port of Python's analyze_test_behavior().
+// and classifies behavior.
 func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 	if len(cr.Summary) == 0 {
 		return BehaviorAnalysis{
@@ -45,15 +68,29 @@ func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 	}
 
 	orderedKeys := cr.OrderedKeys
+	usePresence := hasAllTestKeys(cr)
 
-	fmt.Printf("  [analyze] Analyzing behavior of %d unique tests across %d runs\n", allTests.Len(), len(orderedKeys))
+	fmt.Printf("  [analyze] Analyzing behavior of %d unique tests across %d runs (presence data: %v)\n",
+		allTests.Len(), len(orderedKeys), usePresence)
 
-	// Build state matrix: test → [failed_in_run_0, failed_in_run_1, ...]
-	testStates := make(map[string][]bool)
+	// Build state matrix: test → [TestFailed/TestPassed/TestNotPresent per run]
+	testStates := make(map[string][]TestState)
 	for t := range allTests {
-		states := make([]bool, len(orderedKeys))
+		states := make([]TestState, len(orderedKeys))
+		bk := baseTestKey(t)
 		for i, key := range orderedKeys {
-			states[i] = cr.Summary[key].Contains(t)
+			if cr.Summary[key].Contains(t) {
+				states[i] = TestFailed
+			} else if usePresence {
+				namesForRun := cr.AllTestKeys[key]
+				if namesForRun.Len() > 0 && !namesForRun.Contains(bk) {
+					states[i] = TestNotPresent
+				} else {
+					states[i] = TestPassed
+				}
+			} else {
+				states[i] = TestPassed
+			}
 		}
 		testStates[t] = states
 	}
@@ -83,13 +120,19 @@ func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 }
 
 // analyzeTestPattern determines the behavior type of a single test.
-// Exact port of Python's _analyze_test_pattern().
-func analyzeTestPattern(testName string, states []bool, compositeKeys []string, cr *collect.CollectResult) *TestBehavior {
+// States can be TestFailed, TestPassed, or TestNotPresent.
+// Runs where test is not present are skipped for behavior analysis.
+func analyzeTestPattern(testName string, states []TestState, compositeKeys []string, cr *collect.CollectResult) *TestBehavior {
 	var firstFailIdx, lastFailIdx *int
 	failCount := 0
+	presentCount := 0
 
-	for i, isFailed := range states {
-		if isFailed {
+	for i, s := range states {
+		if s == TestNotPresent {
+			continue
+		}
+		presentCount++
+		if s == TestFailed {
 			if firstFailIdx == nil {
 				idx := i
 				firstFailIdx = &idx
@@ -106,13 +149,22 @@ func analyzeTestPattern(testName string, states []bool, compositeKeys []string, 
 
 	totalRuns := len(states)
 
+	// Find last present run index (for stable_failing check)
+	lastPresentIdx := -1
+	for i := totalRuns - 1; i >= 0; i-- {
+		if states[i] != TestNotPresent {
+			lastPresentIdx = i
+			break
+		}
+	}
+
 	// Determine behavior type
 	var behaviorType string
 	if failCount == 1 {
 		behaviorType = "single_failure"
 	} else if *firstFailIdx == *lastFailIdx {
 		behaviorType = "single_failure"
-	} else if *lastFailIdx == totalRuns-1 {
+	} else if lastPresentIdx >= 0 && *lastFailIdx == lastPresentIdx {
 		if isStableFailingFrom(states, *firstFailIdx) {
 			behaviorType = "stable_failing"
 		} else {
@@ -128,8 +180,8 @@ func analyzeTestPattern(testName string, states []bool, compositeKeys []string, 
 
 	// Collect failed run info
 	var failedRuns []FailedRunInfo
-	for i, isFailed := range states {
-		if !isFailed {
+	for i, s := range states {
+		if s != TestFailed {
 			continue
 		}
 		key := compositeKeys[i]
@@ -149,35 +201,44 @@ func analyzeTestPattern(testName string, states []bool, compositeKeys []string, 
 		})
 	}
 
-	// Find PR/commit info after last failed run
+	// Find PR/commit info for the first present run after last failure
 	var nextPRLink string
 	var nextCommitInfo *CommitInfo
-	if lastFailIdx != nil && *lastFailIdx+1 < totalRuns {
-		nextKey := compositeKeys[*lastFailIdx+1]
-		nextMeta := cr.Meta[nextKey]
-		nextPRLink = nextMeta.Link
-		sha := nextMeta.SHA
-		if sha == "" {
-			parts := strings.SplitN(nextKey, "_", 2)
-			if len(parts) > 0 {
-				sha = parts[0]
+	if lastFailIdx != nil {
+		for i := *lastFailIdx + 1; i < totalRuns; i++ {
+			if states[i] == TestNotPresent {
+				continue
 			}
-		}
-		nextCommitInfo = &CommitInfo{
-			SHA:   sha[:min(len(sha), 7)],
-			Title: nextMeta.Title,
-			TS:    nextMeta.Timestamp,
-			Link:  nextPRLink,
+			nextKey := compositeKeys[i]
+			nextMeta := cr.Meta[nextKey]
+			nextPRLink = nextMeta.Link
+			sha := nextMeta.SHA
+			if sha == "" {
+				parts := strings.SplitN(nextKey, "_", 2)
+				if len(parts) > 0 {
+					sha = parts[0]
+				}
+			}
+			nextCommitInfo = &CommitInfo{
+				SHA:   sha[:min(len(sha), 7)],
+				Title: nextMeta.Title,
+				TS:    nextMeta.Timestamp,
+				Link:  nextPRLink,
+			}
+			break
 		}
 	}
 
-	// Build pattern string
+	// Build pattern string (⚪ = not present)
 	var patternBuilder strings.Builder
 	for _, s := range states {
-		if s {
+		switch s {
+		case TestFailed:
 			patternBuilder.WriteString("🔴")
-		} else {
+		case TestPassed:
 			patternBuilder.WriteString("🟢")
+		case TestNotPresent:
+			patternBuilder.WriteString("⚪")
 		}
 	}
 
@@ -199,6 +260,7 @@ func analyzeTestPattern(testName string, states []bool, compositeKeys []string, 
 		TestName:       testName,
 		TotalRuns:      totalRuns,
 		FailCount:      failCount,
+		PresentCount:   presentCount,
 		FirstFailRun:   firstRun,
 		LastFailRun:    lastRun,
 		FailedRuns:     failedRuns,
@@ -209,31 +271,44 @@ func analyzeTestPattern(testName string, states []bool, compositeKeys []string, 
 	}
 }
 
-// isStableFailingFrom checks if the test fails in all runs from startIdx to the end.
-// Exact port of Python's _is_stable_failing_from().
-func isStableFailingFrom(states []bool, startIdx int) bool {
+// isStableFailingFrom checks if the test fails in all present runs from startIdx to the end.
+// Runs where test is not present are skipped.
+// Returns false if no present runs exist (test was removed).
+func isStableFailingFrom(states []TestState, startIdx int) bool {
 	if startIdx >= len(states) {
 		return false
 	}
+	foundPresent := false
 	for i := startIdx; i < len(states); i++ {
-		if !states[i] {
+		if states[i] == TestNotPresent {
+			continue
+		}
+		foundPresent = true
+		if states[i] != TestFailed {
 			return false
 		}
 	}
-	return true
+	return foundPresent
 }
 
 // hasFlakyBehavior checks if a test has alternating pass/fail pattern.
-// Exact port of Python's _has_flaky_behavior().
-func hasFlakyBehavior(states []bool) bool {
+// Skips runs where test is not present.
+func hasFlakyBehavior(states []TestState) bool {
 	if len(states) < 2 {
 		return false
 	}
 	transitions := 0
-	for i := 1; i < len(states); i++ {
-		if states[i] != states[i-1] {
+	var lastPresent TestState
+	first := true
+	for _, s := range states {
+		if s == TestNotPresent {
+			continue
+		}
+		if !first && s != lastPresent {
 			transitions++
 		}
+		lastPresent = s
+		first = false
 	}
 	return transitions > 2
 }

@@ -67,9 +67,10 @@ func Run(token string, cfg *config.Config, repo, branch string, onProgress func(
 }
 
 type processedRun struct {
-	run     ghWorkflowRun
-	details map[string][]internal.TestDetail
-	title   string
+	run         ghWorkflowRun
+	details     map[string][]internal.TestDetail
+	allTestKeys []string // base keys of ALL tests (passed+failed)
+	title       string
 }
 
 // candidateRun wraps a workflow run with its global ordering index.
@@ -80,10 +81,11 @@ type candidateRun struct {
 
 // runResult is the outcome of processing a single candidate.
 type runResult struct {
-	candidate candidateRun
-	details   map[string][]internal.TestDetail
-	title     string
-	valid     bool
+	candidate   candidateRun
+	details     map[string][]internal.TestDetail
+	allTestKeys []string
+	title       string
+	valid       bool
 }
 
 // collectValidRuns paginates GitHub API and processes runs in parallel,
@@ -191,7 +193,7 @@ func collectValidRuns(
 
 	runs := make([]processedRun, len(validResults))
 	for i, r := range validResults {
-		runs[i] = processedRun{run: r.candidate.run, details: r.details, title: r.title}
+		runs[i] = processedRun{run: r.candidate.run, details: r.details, allTestKeys: r.allTestKeys, title: r.title}
 	}
 
 	fmt.Printf("  [collect] Collected %d valid runs, %d total branch run IDs\n", len(runs), len(allRunIDs))
@@ -204,53 +206,63 @@ func processCandidate(
 	c candidateRun, forceRefresh bool,
 	resultCh chan<- runResult,
 ) {
-	details, hasNoTests := loadOrExtract(cache, logExt, artExt, gh, owner, repo, c.run.ID, forceRefresh)
+	entry := loadOrExtract(cache, logExt, artExt, gh, owner, repo, c.run.ID, forceRefresh)
 	title := ""
-	if !hasNoTests {
+	if !entry.HasNoTests {
 		title = gh.GetCommitTitle(repo, c.run.HeadSHA)
 	}
-	resultCh <- runResult{candidate: c, details: details, title: title, valid: !hasNoTests}
+	resultCh <- runResult{
+		candidate:   c,
+		details:     entry.Details,
+		allTestKeys: entry.AllTestKeys,
+		title:       title,
+		valid:       !entry.HasNoTests,
+	}
 }
 
 func loadOrExtract(
 	cache *Cache, logExt *LogExtractor, artExt *ArtifactExtractor,
 	gh *GitHubClient, owner, repo string, runID int, forceRefresh bool,
-) (map[string][]internal.TestDetail, bool) {
+) *CacheEntry {
 	// 1. Check cache
 	if !forceRefresh {
-		details, hasNoTests, found := cache.Load(owner, repo, runID)
+		entry, found := cache.Load(owner, repo, runID)
 		if found {
-			if !hasNoTests {
+			if !entry.HasNoTests {
 				fmt.Printf("  [collect] Cache hit for run %d\n", runID)
-				return details, false
+				return entry
 			}
 			fmt.Printf("  [collect] Cache invalid for run %d (has_no_tests=true), re-extracting\n", runID)
 		}
 	}
 
 	// 2. Try artifacts first
-	details, hasNoTests := artExt.Extract(repo, runID)
-	isValid := !hasNoTests || len(details) > 0
+	er := artExt.Extract(repo, runID)
+	isValid := !er.HasNoTests || len(er.Details) > 0
 
-	// 3. Fallback to logs
+	// 3. Fallback to logs (no all_test_names available from logs)
 	if !isValid {
 		fmt.Printf("  [collect] Fallback to logs for run %d\n", runID)
 		logBytes, err := gh.DownloadLogs(repo, runID)
 		if err == nil && len(logBytes) > 0 {
 			altDetails, altHasNoTests := logExt.ParseZip(logBytes)
 			if !altHasNoTests {
-				details = altDetails
-				hasNoTests = altHasNoTests
+				er.Details = altDetails
+				er.HasNoTests = altHasNoTests
 			}
 		}
 	}
 
 	// 4. Save to cache
-	if err := cache.Save(owner, repo, runID, details, hasNoTests); err != nil {
+	if err := cache.Save(owner, repo, runID, er.Details, er.AllTestKeys, er.HasNoTests); err != nil {
 		log.Printf("[collect] Error saving to cache for run %d: %v", runID, err)
 	}
 
-	return details, hasNoTests
+	return &CacheEntry{
+		Details:     er.Details,
+		AllTestKeys: er.AllTestKeys,
+		HasNoTests:  er.HasNoTests,
+	}
 }
 
 func getMasterFailed(
@@ -263,13 +275,13 @@ func getMasterFailed(
 		return internal.NewStringSet()
 	}
 
-	details, hasNoTests := loadOrExtract(cache, logExt, artExt, gh, owner, repo, run.ID, forceRefresh)
-	if hasNoTests || len(details) == 0 {
+	entry := loadOrExtract(cache, logExt, artExt, gh, owner, repo, run.ID, forceRefresh)
+	if entry.HasNoTests || len(entry.Details) == 0 {
 		return internal.NewStringSet()
 	}
 
 	result := internal.NewStringSet()
-	for testName := range details {
+	for testName := range entry.Details {
 		result.Add(testName)
 	}
 	return result
@@ -280,6 +292,7 @@ func buildSummary(gh *GitHubClient, repo string, runs []processedRun) *CollectRe
 		Summary:        make(map[string]internal.StringSet),
 		Meta:           make(map[string]internal.RunMeta),
 		AllTestDetails: make(map[string][]internal.TestDetail),
+		AllTestKeys:    make(map[string]internal.StringSet),
 	}
 
 	var orderedKeys []string
@@ -320,6 +333,9 @@ func buildSummary(gh *GitHubClient, repo string, runs []processedRun) *CollectRe
 		}
 
 		result.Summary[compositeKey] = failedSet
+		if len(pr.allTestKeys) > 0 {
+			result.AllTestKeys[compositeKey] = internal.NewStringSet(pr.allTestKeys...)
+		}
 		result.Meta[compositeKey] = internal.RunMeta{
 			SHA:          sha,
 			RunID:        runID,
