@@ -4,6 +4,57 @@
 
 Go-утилита для анализа падений CI-тестов в GitHub Actions. Собирает историю запусков, классифицирует упавшие тесты (stable_failing, flaky, fixed, single_failure), строит HTML/JSON-отчёты.
 
+## Tech Stack
+
+- Go 1.24.6
+- MongoDB 6.0 (кэш распарсенных результатов, через docker-compose)
+- GitHub Actions API (сбор данных о CI-ранах)
+
+## Структура проекта
+
+Пайплайн из 5 фаз, каждая в отдельном пакете:
+
+```
+main.go              — оркестрация пайплайна, прогресс-бары (mpb)
+parse/               — парсинг логов → repo_branches.json
+collect/             — сбор данных из GitHub API (раны, логи, артефакты), кэш в MongoDB
+  collector.go       — основной сборщик
+  github.go          — HTTP-клиент GitHub API
+  cache.go           — MongoDB кэш
+  extractor_*.go     — извлечение данных из логов и артефактов
+analyze/             — классификация тестов (stable_failing, flaky, fixed, single_failure)
+enrich/              — обогащение данных (probable_cause, коммиты)
+render/              — генерация HTML и JSON отчётов
+config/              — загрузка YAML-конфига
+internal/            — общие модели
+```
+
+## Команды
+
+```bash
+# Сборка
+go build -o bambai .
+
+# Запуск (требует GITHUB_TOKEN)
+GITHUB_TOKEN=ghp_xxx ./bambai --config config.yaml
+
+# MongoDB (для кэша)
+docker compose up -d
+docker compose down
+```
+
+## Конфигурация
+
+- `config.yaml` — основной конфиг (не коммитится, есть `config.sample.yaml`)
+- `GITHUB_TOKEN` — env-переменная, обязательна для запуска
+- `repo_branches.json` — входной файл со списком репо/веток для анализа
+
+## Git Commits
+
+- NEVER add "Co-Authored-By" lines to commit messages.
+
+---
+
 ## Триггер анализа отчёта
 
 Когда пользователь скидывает ссылку на JSON-отчёт (путь к файлу или `@file` reference) — это запрос на **исследование текущей CI-ситуации**. Не нужно ждать дополнительных инструкций. Сразу прочитать файл и выдать анализ.
@@ -59,7 +110,3 @@ Go-утилита для анализа падений CI-тестов в GitHub
 - Отметить кросс-ветковые паттерны
 - Дать оценку динамики: улучшается / ухудшается / стабильно
 - Если есть `probable_cause` — указать коммит и PR как вероятный источник
-
-## Git Commits
-
-- NEVER add "Co-Authored-By" lines to commit messages.
