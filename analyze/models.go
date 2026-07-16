@@ -29,7 +29,7 @@ type BehaviorAnalysis struct {
 
 // TestBehavior describes the behavior pattern of a single test.
 type TestBehavior struct {
-	Type           string                `json:"type"` // stable_failing, fixed, flaky, single_failure
+	Type           string                `json:"type"` // stable_failing, fixed, flaky
 	TestName       string                `json:"test_name"`
 	TotalRuns      int                   `json:"total_runs"`
 	PresentCount   int                   `json:"present_count"` // runs where test actually existed

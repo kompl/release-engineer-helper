@@ -109,7 +109,7 @@ func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 		case "flaky":
 			flakyTests[test] = behavior
 		}
-		// single_failure and never_failed are not stored
+		// never_failed is not stored
 	}
 
 	return BehaviorAnalysis{
@@ -119,65 +119,114 @@ func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 	}
 }
 
-// analyzeTestPattern determines the behavior type of a single test.
-// States can be TestFailed, TestPassed, or TestNotPresent.
-// Runs where test is not present are skipped for behavior analysis.
-func analyzeTestPattern(testName string, states []TestState, compositeKeys []string, cr *collect.CollectResult) *TestBehavior {
-	var firstFailIdx, lastFailIdx *int
-	failCount := 0
-	presentCount := 0
+// PatternStats summarises raw counters extracted from a state sequence.
+type PatternStats struct {
+	FailCount    int
+	PresentCount int
+	SessionCount int
+	FirstFailIdx int // -1 if never failed
+	LastFailIdx  int // -1 if never failed
+	LastPresent  int // -1 if all NotPresent
+}
 
+// ComputePatternStats counts failure sessions and present runs.
+// NotPresent runs are transparent: they don't break a session.
+func ComputePatternStats(states []TestState) PatternStats {
+	stats := PatternStats{FirstFailIdx: -1, LastFailIdx: -1, LastPresent: -1}
+	inSession := false
 	for i, s := range states {
 		if s == TestNotPresent {
 			continue
 		}
-		presentCount++
+		stats.PresentCount++
+		stats.LastPresent = i
 		if s == TestFailed {
-			if firstFailIdx == nil {
-				idx := i
-				firstFailIdx = &idx
+			if stats.FirstFailIdx == -1 {
+				stats.FirstFailIdx = i
 			}
-			idx := i
-			lastFailIdx = &idx
-			failCount++
+			stats.LastFailIdx = i
+			stats.FailCount++
+			if !inSession {
+				stats.SessionCount++
+				inSession = true
+			}
+		} else {
+			inSession = false
 		}
 	}
+	return stats
+}
+
+// ClassifyStates returns the behavior type for a sequence of test states.
+//   - test never present in any run                  → absent
+//   - present earlier, but missing from the latest   → undefined
+//     (could be removed, renamed, filtered out, or
+//      simply absent from the artifact — we can't tell)
+//   - present, never failed                          → never_failed
+//   - 1 session ending on the last present run       → stable_failing
+//   - 1 session ending earlier                       → fixed
+//   - 2+ sessions                                    → flaky
+func ClassifyStates(states []TestState) string {
+	stats := ComputePatternStats(states)
+	if stats.PresentCount == 0 {
+		return "absent"
+	}
+	if len(states) > 0 && states[len(states)-1] == TestNotPresent {
+		return "undefined"
+	}
+	if stats.FailCount == 0 {
+		return "never_failed"
+	}
+	switch {
+	case stats.SessionCount >= 2:
+		return "flaky"
+	case stats.LastFailIdx == stats.LastPresent:
+		return "stable_failing"
+	default:
+		return "fixed"
+	}
+}
+
+// BuildPattern renders a state sequence as a 🔴/🟢/⚪ string.
+func BuildPattern(states []TestState) string {
+	var b strings.Builder
+	for _, s := range states {
+		switch s {
+		case TestFailed:
+			b.WriteString("🔴")
+		case TestPassed:
+			b.WriteString("🟢")
+		case TestNotPresent:
+			b.WriteString("⚪")
+		}
+	}
+	return b.String()
+}
+
+// analyzeTestPattern determines the behavior type of a single test.
+// See ClassifyStates for the canonical classification rules. Only stable_failing,
+// fixed and flaky behaviours are stored downstream; absent / undefined /
+// never_failed are not considered actively-failing tests.
+func analyzeTestPattern(testName string, states []TestState, compositeKeys []string, cr *collect.CollectResult) *TestBehavior {
+	stats := ComputePatternStats(states)
+	failCount := stats.FailCount
+	presentCount := stats.PresentCount
 
 	if failCount == 0 {
 		return &TestBehavior{Type: "never_failed"}
 	}
 
 	totalRuns := len(states)
+	behaviorType := ClassifyStates(states)
 
-	// Find last present run index (for stable_failing check)
-	lastPresentIdx := -1
-	for i := totalRuns - 1; i >= 0; i-- {
-		if states[i] != TestNotPresent {
-			lastPresentIdx = i
-			break
-		}
+	var firstFailIdx, lastFailIdx *int
+	if stats.FirstFailIdx >= 0 {
+		v := stats.FirstFailIdx
+		firstFailIdx = &v
 	}
-
-	// Determine behavior type
-	var behaviorType string
-	if failCount == 1 {
-		behaviorType = "single_failure"
-	} else if *firstFailIdx == *lastFailIdx {
-		behaviorType = "single_failure"
-	} else if lastPresentIdx >= 0 && *lastFailIdx == lastPresentIdx {
-		// Find the start of the last continuous failure block (ignoring NotPresent gaps)
-		streakStart := findLastStreakStart(states)
-		if isStableFailingFrom(states, streakStart) {
-			behaviorType = "stable_failing"
-		} else {
-			behaviorType = "flaky"
-		}
-	} else {
-		if hasFlakyBehavior(states) {
-			behaviorType = "flaky"
-		} else {
-			behaviorType = "fixed"
-		}
+	if stats.LastFailIdx >= 0 {
+		v := stats.LastFailIdx
+		lastFailIdx = &v
 	}
 
 	// Collect failed run info
@@ -231,18 +280,7 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 		}
 	}
 
-	// Build pattern string (⚪ = not present)
-	var patternBuilder strings.Builder
-	for _, s := range states {
-		switch s {
-		case TestFailed:
-			patternBuilder.WriteString("🔴")
-		case TestPassed:
-			patternBuilder.WriteString("🟢")
-		case TestNotPresent:
-			patternBuilder.WriteString("⚪")
-		}
-	}
+	pattern := BuildPattern(states)
 
 	// 1-based run numbers
 	var firstRun, lastRun *int
@@ -266,74 +304,11 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 		FirstFailRun:   firstRun,
 		LastFailRun:    lastRun,
 		FailedRuns:     failedRuns,
-		Pattern:        patternBuilder.String(),
+		Pattern:        pattern,
 		Details:        details,
 		NextPRLink:     nextPRLink,
 		NextCommitInfo: nextCommitInfo,
 	}
-}
-
-// findLastStreakStart finds the start of the last continuous failure block,
-// treating NotPresent as transparent (not breaking the streak).
-// Walks backward from the end, skipping NotPresent and Failed, stopping at Passed.
-func findLastStreakStart(states []TestState) int {
-	if len(states) == 0 {
-		return 0
-	}
-	start := len(states) - 1
-	for start > 0 {
-		if states[start-1] == TestPassed {
-			break
-		}
-		start--
-	}
-	// Skip leading NotPresent to find the first actual Failed
-	for start < len(states) && states[start] == TestNotPresent {
-		start++
-	}
-	return start
-}
-
-// isStableFailingFrom checks if the test fails in all present runs from startIdx to the end.
-// Runs where test is not present are skipped.
-// Returns false if no present runs exist (test was removed).
-func isStableFailingFrom(states []TestState, startIdx int) bool {
-	if startIdx >= len(states) {
-		return false
-	}
-	foundPresent := false
-	for i := startIdx; i < len(states); i++ {
-		if states[i] == TestNotPresent {
-			continue
-		}
-		foundPresent = true
-		if states[i] != TestFailed {
-			return false
-		}
-	}
-	return foundPresent
-}
-
-// hasFlakyBehavior checks if a test has alternating pass/fail pattern.
-// Skips runs where test is not present.
-func hasFlakyBehavior(states []TestState) bool {
-	if len(states) < 2 {
-		return false
-	}
-	transitions := 0
-	var lastPresent TestState
-	first := true
-	for _, s := range states {
-		if s == TestNotPresent {
-			continue
-		}
-		if !first && s != lastPresent {
-			transitions++
-		}
-		lastPresent = s
-		first = false
-	}
-	return transitions > 2
 }
 
 // getRunDiffs computes the diff between consecutive runs.

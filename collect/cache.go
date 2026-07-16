@@ -23,6 +23,7 @@ type cachedDocument struct {
 	Schema      int               `bson:"schema"`
 	Owner       string            `bson:"owner"`
 	Repo        string            `bson:"repo"`
+	Branch      string            `bson:"branch"` // schema 4: head branch of the run
 	RunID       int               `bson:"run_id"`
 	CreatedAt   string            `bson:"created_at"`
 	HasNoTests  bool              `bson:"has_no_tests"`
@@ -52,12 +53,16 @@ func NewCache(uri, dbName, collName string) (*Cache, error) {
 
 	coll := client.Database(dbName).Collection(collName)
 
-	// Create unique index on (owner, repo, run_id)
-	indexModel := mongo.IndexModel{
+	// Unique index on (owner, repo, run_id) — run_id is globally unique per repo
+	uniqueIdx := mongo.IndexModel{
 		Keys:    bson.D{{Key: "owner", Value: 1}, {Key: "repo", Value: 1}, {Key: "run_id", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}
-	_, _ = coll.Indexes().CreateOne(ctx, indexModel)
+	// Secondary index for branch-scoped queries
+	branchIdx := mongo.IndexModel{
+		Keys: bson.D{{Key: "owner", Value: 1}, {Key: "repo", Value: 1}, {Key: "branch", Value: 1}, {Key: "run_id", Value: 1}},
+	}
+	_, _ = coll.Indexes().CreateMany(ctx, []mongo.IndexModel{uniqueIdx, branchIdx})
 
 	return &Cache{client: client, coll: coll}, nil
 }
@@ -89,9 +94,9 @@ func (c *Cache) Load(owner, repo string, runID int) (*CacheEntry, bool) {
 		return nil, false
 	}
 
-	// Schema < 3 doesn't have AllTestKeys — treat as cache miss
-	// so that re-extraction populates the new field.
-	if doc.Schema < 3 && !doc.HasNoTests {
+	// Schema < 4 lacks the branch field — treat as miss so re-extraction
+	// repopulates the document. Older entries don't have AllTestKeys either.
+	if doc.Schema < 4 {
 		return nil, false
 	}
 
@@ -103,14 +108,15 @@ func (c *Cache) Load(owner, repo string, runID int) (*CacheEntry, bool) {
 }
 
 // Save stores parsed results for a run (upsert).
-func (c *Cache) Save(owner, repo string, runID int, details map[string][]internal.TestDetail, allTestKeys []string, hasNoTests bool) error {
+func (c *Cache) Save(owner, repo, branch string, runID int, details map[string][]internal.TestDetail, allTestKeys []string, hasNoTests bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	doc := cachedDocument{
-		Schema:      3,
+		Schema:      4,
 		Owner:       owner,
 		Repo:        repo,
+		Branch:      branch,
 		RunID:       runID,
 		CreatedAt:   time.Now().Format(time.RFC3339),
 		HasNoTests:  hasNoTests,

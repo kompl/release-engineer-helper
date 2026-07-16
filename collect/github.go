@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -124,14 +125,19 @@ func (g *GitHubClient) getZip(url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// FetchRunsPage fetches a single page of workflow runs for a branch.
+// FetchRunsPage fetches a single page of workflow runs.
+// Empty branch fetches runs across all branches.
 func (g *GitHubClient) FetchRunsPage(repo, branch string, page int) ([]ghWorkflowRun, error) {
-	url := fmt.Sprintf(
-		"https://api.github.com/repos/%s/%s/actions/workflows/%s/runs?branch=%s&per_page=100&page=%d",
-		g.owner, repo, g.workflow, branch, page,
+	branchParam := ""
+	if branch != "" {
+		branchParam = "branch=" + url.QueryEscape(branch) + "&"
+	}
+	reqURL := fmt.Sprintf(
+		"https://api.github.com/repos/%s/%s/actions/workflows/%s/runs?%sper_page=100&page=%d",
+		g.owner, repo, g.workflow, branchParam, page,
 	)
 
-	body, err := g.get(url)
+	body, err := g.get(reqURL)
 	if err != nil {
 		return nil, err
 	}
@@ -144,31 +150,45 @@ func (g *GitHubClient) FetchRunsPage(repo, branch string, page int) ([]ghWorkflo
 	return resp.WorkflowRuns, nil
 }
 
-// GetLatestCompletedRun returns the latest completed run for a branch.
-func (g *GitHubClient) GetLatestCompletedRun(repo, branch string) *ghWorkflowRun {
-	url := fmt.Sprintf(
-		"https://api.github.com/repos/%s/%s/actions/workflows/%s/runs?branch=%s&per_page=50",
-		g.owner, repo, g.workflow, branch,
+// GetRun fetches a single workflow run by ID.
+func (g *GitHubClient) GetRun(repo string, runID int) (*ghWorkflowRun, error) {
+	reqURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d", g.owner, repo, runID)
+
+	body, err := g.get(reqURL)
+	if err != nil {
+		return nil, err
+	}
+
+	var run ghWorkflowRun
+	if err := json.Unmarshal(body, &run); err != nil {
+		return nil, fmt.Errorf("parse run response: %w", err)
+	}
+	return &run, nil
+}
+
+// GetBranchHeadSHA returns the newest commit SHA on a branch at or before
+// the given RFC3339 time.
+func (g *GitHubClient) GetBranchHeadSHA(repo, branch, until string) (string, error) {
+	reqURL := fmt.Sprintf(
+		"https://api.github.com/repos/%s/%s/commits?sha=%s&until=%s&per_page=1",
+		g.owner, repo, url.QueryEscape(branch), url.QueryEscape(until),
 	)
 
-	body, err := g.get(url)
+	body, err := g.get(reqURL)
 	if err != nil {
-		log.Printf("[collect] Error getting latest run for %s/%s: %v", repo, branch, err)
-		return nil
+		return "", err
 	}
 
-	var resp ghWorkflowRunsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil
+	var commits []struct {
+		SHA string `json:"sha"`
 	}
-
-	for i := range resp.WorkflowRuns {
-		run := &resp.WorkflowRuns[i]
-		if run.Status == "completed" && (run.Conclusion == "success" || run.Conclusion == "failure") {
-			return run
-		}
+	if err := json.Unmarshal(body, &commits); err != nil {
+		return "", fmt.Errorf("parse commits response: %w", err)
 	}
-	return nil
+	if len(commits) == 0 {
+		return "", fmt.Errorf("no commits on %s/%s before %s", repo, branch, until)
+	}
+	return commits[0].SHA, nil
 }
 
 // GetCommitTitle fetches the first line of a commit message by SHA.

@@ -67,7 +67,7 @@ Parse  -->  Collect  -->  Analyze  -->  Enrich  -->  Render
 
 ### 2.2 Фаза Collect
 
-**Файлы:** `collect/collector.go`, `collect/github.go`, `collect/cache.go`, `collect/extractor_artifacts.go`, `collect/extractor_logs.go`
+**Файлы:** `collect/collector.go`, `collect/runsource.go`, `collect/github.go`, `collect/cache.go`, `collect/extractor_artifacts.go`, `collect/extractor_logs.go`
 
 **Вход:** `map[repo][]branch` + конфигурация + GITHUB_TOKEN
 
@@ -123,6 +123,19 @@ type CollectResult struct {
 - Строит `compositeKey = "{sha}_{run_id}"`.
 - Сортирует упавшие тесты по `order_index`.
 - Добавляет в `Summary`, `Meta`, `AllTestDetails`.
+
+**Делегированный CI** (`collect/runsource.go`):
+
+У homs собственный `ci.yml` — тонкий прокси: он диспатчит `ci.yml` в соседнем репо `homs-ci` (`run-name: "CI: <branch> <run_id>"`) и ждёт результата. Тесты выполняются и артефакты живут на ранах homs-ci; у самих ранов homs-ci `head_branch` всегда `master`, а `head_sha` указывает на коммит homs-ci — для анализа бесполезны.
+
+Абстракция `runSource` полностью скрывает это от остального кода (маппинг `homs → homs-ci` захардкожен в `delegatedCIRepos`):
+
+- **Перечисление ранов:** страницы ранов homs-ci запрашиваются без фильтра по ветке, ветка сопоставляется по `display_title` (`"CI: v2.8 …"`); каждый матч нормализуется — `HeadBranch` подменяется на логическую ветку homs.
+- **Резолв SHA** (`resolveHead`, лениво, только для валидных ранов): если в имени рана есть run_id диспатчащего рана — `head_sha` берётся из него (`GET /actions/runs/{id}` в homs); для ночных/ручных запусков (run_id нет — их диспатчит `scheduled-builds.yml` самого homs-ci) — head ветки homs на момент старта рана (`GET /commits?sha=<branch>&until=<started_at>`).
+- **Артефакты/логи** качаются из homs-ci (`dataRepo()`), `Meta.Link` ведёт на ран homs-ci (там результаты и скриншоты).
+- **Кэш и downstream:** документы в MongoDB хранятся под логическим репо `homs` (run_id глобально уникальны в GitHub Actions), поэтому analyze/enrich/render работают без изменений и о homs-ci не знают.
+
+Для обычных репо `runSource` прозрачно проксирует прежнее поведение (`ciRepo == repo`, `resolveHead` — no-op).
 
 ---
 
@@ -603,3 +616,11 @@ Zip-лог запуска может весить десятки мегабай�
 | `golang.org/x/sync` | (транзитивная зависимость) |
 
 Стандартная библиотека Go используется для: `archive/zip`, `encoding/xml`, `encoding/json`, `html/template`, `net/http`, `regexp`, `sync`.
+
+1. одежда
+2. аптечка
+3. гигиена
+4. передачки
+5. документы
+6. зарядки + телефон наушники
+7. 

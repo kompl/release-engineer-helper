@@ -58,6 +58,7 @@ type jsonProject struct {
 	MasterBranch             string            `json:"master_branch"`
 	LatestRun                jsonRunWithTests  `json:"latest_run"`
 	LatestRunWithTestResults *jsonRunWithTests `json:"latest_run_with_test_results,omitempty"`
+	Additional               []jsonFailedTest  `json:"additional,omitempty"`
 	Summary                  jsonSummary       `json:"summary"`
 }
 
@@ -94,6 +95,8 @@ type jsonFailedTest struct {
 	FailingSince   *jsonFailingSince  `json:"failing_since,omitempty"`
 	FirstSeen      *jsonFirstSeen     `json:"first_seen_in_analysis,omitempty"`
 	FlakyInfo      *jsonFlakyInfo     `json:"flaky_info,omitempty"`
+	LastFailed     *jsonLastFailed    `json:"last_failed,omitempty"`
+	ProbableFix    *jsonProbableFix   `json:"probable_fix,omitempty"`
 }
 
 type jsonProbableCause struct {
@@ -119,6 +122,19 @@ type jsonFlakyInfo struct {
 	FailCount    int `json:"fail_count"`
 	TotalRuns    int `json:"total_runs"`
 	PresentCount int `json:"present_count"` // runs where test actually existed
+}
+
+type jsonLastFailed struct {
+	RunID     int    `json:"run_id"`
+	Timestamp string `json:"timestamp"`
+	RunLink   string `json:"run_link"`
+}
+
+type jsonProbableFix struct {
+	SHA         string `json:"sha"`
+	CommitTitle string `json:"commit_title"`
+	Timestamp   string `json:"timestamp"`
+	RunLink     string `json:"run_link"`
 }
 
 func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
@@ -156,7 +172,7 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 		Conclusion:  latestMeta.Conclusion,
 		Link:        latestMeta.Link,
 		TotalFailed: latestFailed.Len(),
-		FailedTests: buildFailedTests(r, latestFailed, allBehavior, latestMeta),
+		FailedTests: buildFailedTests(r, latestFailed, allBehavior, latestMeta, false),
 	}
 
 	project := jsonProject{
@@ -190,21 +206,65 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 					Conclusion:  meta.Conclusion,
 					Link:        meta.Link,
 					TotalFailed: failed.Len(),
-					FailedTests: buildFailedTests(r, failed, allBehavior, meta),
+					FailedTests: buildFailedTests(r, failed, allBehavior, meta, true),
 				}
 				break
 			}
 		}
 	}
 
+	project.Additional = buildAdditional(r, project, allBehavior, latestMeta)
+
 	return project
 }
 
+// buildAdditional lists historical data for every classified test that is not
+// already mentioned in the failed_tests of latest_run / latest_run_with_test_results
+// (fixed tests and flaky/stable ones that did not fail in those runs).
+func buildAdditional(
+	r RepoResult,
+	project jsonProject,
+	allBehavior map[string]*analyze.TestBehavior,
+	latestMeta internal.RunMeta,
+) []jsonFailedTest {
+	mentioned := internal.NewStringSet()
+	for _, t := range project.LatestRun.FailedTests {
+		mentioned.Add(t.TestName)
+	}
+	if project.LatestRunWithTestResults != nil {
+		for _, t := range project.LatestRunWithTestResults.FailedTests {
+			mentioned.Add(t.TestName)
+		}
+	}
+
+	rest := internal.NewStringSet()
+	for testName := range allBehavior {
+		if !mentioned.Contains(testName) {
+			rest.Add(testName)
+		}
+	}
+	if rest.Len() == 0 {
+		return nil
+	}
+
+	additional := buildFailedTests(r, rest, allBehavior, latestMeta, true)
+
+	// Actionable first: still-failing tests ahead of fixed ones
+	rank := map[string]int{"stable_failing": 0, "flaky": 1, "fixed": 2}
+	sort.SliceStable(additional, func(i, j int) bool {
+		return rank[additional[i].Classification] < rank[additional[j].Classification]
+	})
+	return additional
+}
+
+// withHistory adds last_failed / probable_fix — retrospective fields that only
+// make sense for tests not taken from the run being described.
 func buildFailedTests(
 	r RepoResult,
 	failedSet internal.StringSet,
 	allBehavior map[string]*analyze.TestBehavior,
 	runMeta internal.RunMeta,
+	withHistory bool,
 ) []jsonFailedTest {
 	cr := r.Collect
 	ar := r.Analyze
@@ -293,6 +353,26 @@ func buildFailedTests(
 			}
 		}
 
+		if withHistory && behavior != nil {
+			if n := len(behavior.FailedRuns); n > 0 {
+				last := behavior.FailedRuns[n-1]
+				entry.LastFailed = &jsonLastFailed{
+					RunID:     last.Meta.RunID,
+					Timestamp: last.Meta.Timestamp,
+					RunLink:   last.Meta.Link,
+				}
+			}
+			if behavior.Type == "fixed" && behavior.NextCommitInfo != nil {
+				fix := behavior.NextCommitInfo
+				entry.ProbableFix = &jsonProbableFix{
+					SHA:         fix.SHA,
+					CommitTitle: fix.Title,
+					Timestamp:   fix.TS,
+					RunLink:     fix.Link,
+				}
+			}
+		}
+
 		failedTests = append(failedTests, entry)
 	}
 
@@ -332,7 +412,7 @@ func classifyTest(testName string, stable, fixed, flaky map[string]*analyze.Test
 	if _, ok := flaky[testName]; ok {
 		return "flaky"
 	}
-	return "single_failure"
+	return "stable_failing"
 }
 
 // findStreakStart finds the run that started the current consecutive failure streak.

@@ -32,6 +32,11 @@ type ghWorkflowRun struct {
 	RunStartedAt string `json:"run_started_at"`
 	CreatedAt    string `json:"created_at"`
 	HTMLURL      string `json:"html_url"`
+	DisplayTitle string `json:"display_title"`
+
+	// dispatchRunID is the run in the logical repo that dispatched this run
+	// (0 when unknown) — set by runSource for delegated-CI repos, not from JSON.
+	dispatchRunID int
 }
 
 // ghWorkflowRunsResponse is the GitHub API response for listing workflow runs.

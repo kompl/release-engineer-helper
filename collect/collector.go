@@ -19,6 +19,7 @@ const maxPages = 10
 // onProgress is called each time a valid run is collected (may be nil).
 func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, onProgress func()) *CollectResult {
 	gh := NewGitHubClient(token, cfg.GitHub.Owner, cfg.GitHub.WorkflowFile)
+	src := newRunSource(gh, repo)
 
 	logExtractor := NewLogExtractor()
 	artifactExtractor := NewArtifactExtractor(gh)
@@ -30,15 +31,15 @@ func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, on
 	masterFailed := internal.NewStringSet()
 	if branch != cfg.Analysis.MasterBranch {
 		fmt.Printf("  [collect] Looking for failed tests in '%s'...\n", cfg.Analysis.MasterBranch)
-		masterFailed = getMasterFailed(gh, cache, logExtractor, artifactExtractor, owner, repo, cfg.Analysis.MasterBranch, forceRefresh)
+		masterFailed = getMasterFailed(src, cache, logExtractor, artifactExtractor, owner, cfg.Analysis.MasterBranch, forceRefresh)
 		fmt.Printf("  [collect] Found %d failing tests in %s\n", masterFailed.Len(), cfg.Analysis.MasterBranch)
 	}
 
 	// --- Collect valid runs with early stopping ---
 	fmt.Printf("  [collect] Collecting up to %d valid runs for %s/%s...\n", cfg.Analysis.MaxRuns, repo, branch)
 	validRuns, allBranchRunIDs := collectValidRuns(
-		gh, cache, logExtractor, artifactExtractor,
-		owner, repo, branch, cfg.Analysis.MaxRuns, forceRefresh, onProgress,
+		src, cache, logExtractor, artifactExtractor,
+		owner, branch, cfg.Analysis.MaxRuns, forceRefresh, onProgress,
 	)
 
 	if len(validRuns) == 0 {
@@ -52,7 +53,7 @@ func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, on
 	}
 
 	// --- Build summary, meta, allTestDetails ---
-	result := buildSummary(gh, repo, validRuns)
+	result := buildSummary(src, validRuns)
 	result.MasterFailed = masterFailed
 	result.AllBranchRunIDs = allBranchRunIDs
 
@@ -92,9 +93,9 @@ type runResult struct {
 //   - This keeps maxRuns workers always in flight (no idle time).
 //   - Paginator continues collecting all branch run IDs even after enough valid runs are found.
 func collectValidRuns(
-	gh *GitHubClient, cache *Cache,
+	src *runSource, cache *Cache,
 	logExt *LogExtractor, artExt *ArtifactExtractor,
-	owner, repo, branch string,
+	owner, branch string,
 	maxRuns int,
 	forceRefresh bool,
 	onProgress func(),
@@ -115,19 +116,13 @@ func collectValidRuns(
 		cancelled := false
 		idx := 0
 		for page := 1; page <= maxPages; page++ {
-			runs, err := gh.FetchRunsPage(repo, branch, page)
+			runs, hasMore, err := src.fetchRunsPage(branch, page)
 			if err != nil {
 				log.Printf("[collect] Error listing runs page %d: %v", page, err)
 				break
 			}
-			if len(runs) == 0 {
-				break
-			}
 
 			for _, run := range runs {
-				if run.Status != "completed" || (run.Conclusion != "success" && run.Conclusion != "failure") {
-					continue
-				}
 				allIDs = append(allIDs, run.ID)
 				if !cancelled {
 					select {
@@ -137,6 +132,10 @@ func collectValidRuns(
 						cancelled = true
 					}
 				}
+			}
+
+			if !hasMore {
+				break
 			}
 		}
 	}()
@@ -151,7 +150,7 @@ func collectValidRuns(
 			break
 		}
 		inFlight++
-		go processCandidate(cache, logExt, artExt, gh, owner, repo, c, forceRefresh, resultCh)
+		go processCandidate(cache, logExt, artExt, src, owner, c, forceRefresh, resultCh)
 	}
 
 	// Phase 2: collect results, replace invalid runs with next candidates
@@ -171,7 +170,7 @@ func collectValidRuns(
 			c, ok := <-candidateCh
 			if ok {
 				inFlight++
-				go processCandidate(cache, logExt, artExt, gh, owner, repo, c, forceRefresh, resultCh)
+				go processCandidate(cache, logExt, artExt, src, owner, c, forceRefresh, resultCh)
 			}
 		}
 	}
@@ -196,14 +195,17 @@ func collectValidRuns(
 
 func processCandidate(
 	cache *Cache, logExt *LogExtractor, artExt *ArtifactExtractor,
-	gh *GitHubClient, owner, repo string,
+	src *runSource, owner string,
 	c candidateRun, forceRefresh bool,
 	resultCh chan<- runResult,
 ) {
-	entry := loadOrExtract(cache, logExt, artExt, gh, owner, repo, c.run.ID, forceRefresh)
+	entry := loadOrExtract(cache, logExt, artExt, src, owner, c.run.HeadBranch, c.run.ID, forceRefresh)
 	title := ""
 	if !entry.HasNoTests {
-		title = gh.GetCommitTitle(repo, c.run.HeadSHA)
+		src.resolveHead(&c.run)
+		if c.run.HeadSHA != "" {
+			title = src.gh.GetCommitTitle(src.repo, c.run.HeadSHA)
+		}
 	}
 	resultCh <- runResult{
 		candidate:   c,
@@ -216,11 +218,11 @@ func processCandidate(
 
 func loadOrExtract(
 	cache *Cache, logExt *LogExtractor, artExt *ArtifactExtractor,
-	gh *GitHubClient, owner, repo string, runID int, forceRefresh bool,
+	src *runSource, owner, branch string, runID int, forceRefresh bool,
 ) *CacheEntry {
-	// 1. Check cache
+	// 1. Check cache (keyed by the logical repo regardless of CI delegation)
 	if !forceRefresh {
-		entry, found := cache.Load(owner, repo, runID)
+		entry, found := cache.Load(owner, src.repo, runID)
 		if found {
 			if !entry.HasNoTests {
 				fmt.Printf("  [collect] Cache hit for run %d\n", runID)
@@ -231,13 +233,13 @@ func loadOrExtract(
 	}
 
 	// 2. Try artifacts first
-	er := artExt.Extract(repo, runID)
+	er := artExt.Extract(src.dataRepo(), runID)
 	isValid := !er.HasNoTests || len(er.Details) > 0
 
 	// 3. Fallback to logs (no all_test_names available from logs)
 	if !isValid {
 		fmt.Printf("  [collect] Fallback to logs for run %d\n", runID)
-		logBytes, err := gh.DownloadLogs(repo, runID)
+		logBytes, err := src.gh.DownloadLogs(src.dataRepo(), runID)
 		if err == nil && len(logBytes) > 0 {
 			altDetails, altHasNoTests := logExt.ParseZip(logBytes)
 			if !altHasNoTests {
@@ -248,7 +250,7 @@ func loadOrExtract(
 	}
 
 	// 4. Save to cache
-	if err := cache.Save(owner, repo, runID, er.Details, er.AllTestKeys, er.HasNoTests); err != nil {
+	if err := cache.Save(owner, src.repo, branch, runID, er.Details, er.AllTestKeys, er.HasNoTests); err != nil {
 		log.Printf("[collect] Error saving to cache for run %d: %v", runID, err)
 	}
 
@@ -260,16 +262,16 @@ func loadOrExtract(
 }
 
 func getMasterFailed(
-	gh *GitHubClient, cache *Cache,
+	src *runSource, cache *Cache,
 	logExt *LogExtractor, artExt *ArtifactExtractor,
-	owner, repo, masterBranch string, forceRefresh bool,
+	owner, masterBranch string, forceRefresh bool,
 ) internal.StringSet {
-	run := gh.GetLatestCompletedRun(repo, masterBranch)
+	run := src.latestCompletedRun(masterBranch)
 	if run == nil {
 		return internal.NewStringSet()
 	}
 
-	entry := loadOrExtract(cache, logExt, artExt, gh, owner, repo, run.ID, forceRefresh)
+	entry := loadOrExtract(cache, logExt, artExt, src, owner, run.HeadBranch, run.ID, forceRefresh)
 	if entry.HasNoTests || len(entry.Details) == 0 {
 		return internal.NewStringSet()
 	}
@@ -281,7 +283,7 @@ func getMasterFailed(
 	return result
 }
 
-func buildSummary(gh *GitHubClient, repo string, runs []processedRun) *CollectResult {
+func buildSummary(src *runSource, runs []processedRun) *CollectResult {
 	result := &CollectResult{
 		Summary:        make(map[string]internal.StringSet),
 		Meta:           make(map[string]internal.RunMeta),
@@ -299,7 +301,11 @@ func buildSummary(gh *GitHubClient, repo string, runs []processedRun) *CollectRe
 
 		title := pr.title
 		ts := parseTimestamp(run.RunStartedAt, run.CreatedAt)
-		link := gh.RunURL(repo, runID)
+		// The run link points at the repo where the tests actually ran
+		link := run.HTMLURL
+		if link == "" {
+			link = src.gh.RunURL(src.dataRepo(), runID)
+		}
 
 		// Build ordered list of test names, sorted by order_index
 		// (Python dict preserves insertion order; Go map does not,
