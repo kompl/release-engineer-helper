@@ -15,7 +15,9 @@ Go-утилита для анализа падений CI-тестов в GitHub
 Пайплайн из 5 фаз, каждая в отдельном пакете:
 
 ```
-main.go              — оркестрация пайплайна, прогресс-бары (mpb)
+cmd/bambai/          — main: оркестрация пайплайна, прогресс-бары (mpb), composition root
+cmd/rate-limit/      — утилита проверки GitHub rate limit
+cmd/test-history/    — утилита анализа истории теста по MongoDB-кэшу
 parse/               — парсинг логов → repo_branches.json
 collect/             — сбор данных из GitHub API (раны, логи, артефакты), кэш в MongoDB
   collector.go       — основной сборщик
@@ -26,14 +28,31 @@ analyze/             — классификация тестов (stable_failing
 enrich/              — обогащение данных (probable_cause, коммиты)
 render/              — генерация HTML и JSON отчётов
 config/              — загрузка YAML-конфига
-internal/            — общие модели
+internal/models/     — контрактные типы фаз (CollectResult, AnalyzeResult, EnrichResult, RepoResult…)
 ```
+
+## Архитектурные правила
+
+Фазы общаются только через контракты в `internal/models` и не импортируют друг друга;
+все фазы видит только оркестратор `cmd/bambai`. Инфраструктурные зависимости фаза
+получает через свой интерфейс (пример: `enrich.StableSinceFinder`, реализуемый
+`*collect.Cache`), подстановка — в composition root. Граф зафиксирован в
+`.go-arch-lint.yml` — новая межпакетная зависимость требует явного разрешения там.
 
 ## Команды
 
 ```bash
 # Сборка
-go build -o bambai .
+make build            # go build -o bambai ./cmd/bambai
+make build-all        # + rate-limit, test-history
+
+# Тесты (герметично, live-тесты GitHub API скипаются)
+make test
+make test-live        # с GITHUB_TOKEN — включая live-тесты
+
+# Линтеры: go vet + go-arch-lint (архитектурный, конфиг .go-arch-lint.yml)
+make lint
+# установка линтера: go install github.com/fe3dback/go-arch-lint@latest
 
 # Запуск (требует GITHUB_TOKEN)
 GITHUB_TOKEN=ghp_xxx ./bambai --config config.yaml

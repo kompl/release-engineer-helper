@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"release-engineer-helper/v0.1/internal"
+	"release-engineer-helper/internal/models"
 )
 
 // LogExtractor parses zip logs from GitHub Actions to extract failed test results.
@@ -39,14 +39,14 @@ func NewLogExtractor() *LogExtractor {
 }
 
 // ParseZip parses zip log bytes and returns (failed_details, hasNoTests).
-func (le *LogExtractor) ParseZip(zipBytes []byte) (map[string][]internal.TestDetail, bool) {
+func (le *LogExtractor) ParseZip(zipBytes []byte) (map[string][]models.TestDetail, bool) {
 	r, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
 		log.Printf("[logs] Bad zip: %v", err)
 		return nil, true
 	}
 
-	failed := make(map[string][]internal.TestDetail)
+	failed := make(map[string][]models.TestDetail)
 	hasNoTests := false
 	foundTestResults := false
 	orderPos := 0
@@ -171,7 +171,7 @@ func (le *LogExtractor) ParseZip(zipBytes []byte) (map[string][]internal.TestDet
 				if context == "" {
 					continue
 				}
-				failed[te.name] = append(failed[te.name], internal.TestDetail{
+				failed[te.name] = append(failed[te.name], models.TestDetail{
 					File:       f.Name,
 					LineNum:    0,
 					Context:    context,

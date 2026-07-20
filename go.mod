@@ -1,4 +1,4 @@
-module release-engineer-helper/v0.1
+module release-engineer-helper
 
 go 1.24.6
 

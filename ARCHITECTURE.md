@@ -22,6 +22,8 @@ Parse  -->  Collect  -->  Analyze  -->  Enrich  -->  Render
 
 Фазы Parse, Collect, Analyze, Enrich выполняются в строгом порядке. Внутри Collect и Render используется параллелизм. Каждая фаза имеет явный контракт: типизированный вход и типизированный выход.
 
+Контрактные типы всех фаз (`CollectResult`, `AnalyzeResult`, `EnrichResult`, `RepoResult` и вложенные в них) живут в `internal/models` — фазы зависят только от этого пакета (и `config`, где нужен) и не импортируют друг друга. Оркестрация — в `cmd/bambai/main.go`: он единственный видит все фазы и связывает их, в том числе подставляет `*collect.Cache` в интерфейс `enrich.StableSinceFinder` (composition root). Граф зависимостей зафиксирован в `.go-arch-lint.yml` и проверяется командой `go-arch-lint check` (`make lint`).
+
 ---
 
 ### 2.1 Фаза Parse
@@ -197,7 +199,7 @@ TestD:    [false, false, false, false,  true]  → single_failure
 
 ### 2.4 Фаза Enrich
 
-**Файлы:** `enrich/enricher.go`, `enrich/models.go`
+**Файлы:** `enrich/enricher.go`
 
 **Вход:** `*CollectResult` + `*AnalyzeResult` + конфигурация
 
@@ -317,14 +319,14 @@ type RepoResult struct {
 ### Ключевые структуры данных
 
 ```
-internal.TestDetail
+models.TestDetail
 ├── File       string   // имя файла внутри zip-архива
 ├── LineNum    int      // номер строки (0 для JUnit)
 ├── Context    string   // текст ошибки
 ├── Project    string   // имя артефакта (e.g. "hydra-core-tests")
 └── OrderIndex int      // позиция в исходном порядке
 
-internal.RunMeta
+models.RunMeta
 ├── SHA          string   // git commit sha
 ├── RunID        int      // GitHub Actions run ID
 ├── Title        string   // первая строка commit message
@@ -335,7 +337,7 @@ internal.RunMeta
 ├── Order        []string // имена упавших тестов в порядке парсинга
 └── CompositeKey string   // "{sha}_{run_id}"
 
-collect.CollectResult
+models.CollectResult
 ├── Summary         map[compositeKey]StringSet   // key → set упавших тестов
 ├── Meta            map[compositeKey]RunMeta     // key → метаданные
 ├── AllTestDetails  map[testName][]TestDetail    // имя теста → детали ошибок
@@ -343,7 +345,7 @@ collect.CollectResult
 ├── AllBranchRunIDs []int                        // все run_id ветки
 └── OrderedKeys     []string                     // ключи, oldest-first
 
-analyze.AnalyzeResult
+models.AnalyzeResult
 ├── Behavior
 │   ├── StableFailing  map[testName]*TestBehavior
 │   ├── FixedTests     map[testName]*TestBehavior
@@ -351,7 +353,7 @@ analyze.AnalyzeResult
 ├── RunDiffs   []RunDiff   // diff между последовательными запусками
 └── Stats      Stats
 
-analyze.TestBehavior
+models.TestBehavior
 ├── Type           string   // "stable_failing" | "fixed" | "flaky" | "single_failure"
 ├── TestName       string
 ├── TotalRuns      int
@@ -366,9 +368,9 @@ analyze.TestBehavior
 
 ## 4. Параллелизм
 
-### 4.1 Уровень main.go — горутины per-repo/branch
+### 4.1 Уровень cmd/bambai/main.go — горутины per-repo/branch
 
-`main.go` запускает по одной горутине на каждую пару `(repo, branch)`. Все горутины стартуют одновременно. Результаты собираются через буферизированный канал `resultCh`:
+`cmd/bambai/main.go` запускает по одной горутине на каждую пару `(repo, branch)`. Все горутины стартуют одновременно. Результаты собираются через буферизированный канал `resultCh`:
 
 ```
 main goroutine

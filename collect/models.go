@@ -1,23 +1,12 @@
 package collect
 
-import "release-engineer-helper/v0.1/internal"
-
-// CollectResult is the output of the Collect phase.
-type CollectResult struct {
-	Summary         map[string]internal.StringSet    // compositeKey → set of failed test names
-	Meta            map[string]internal.RunMeta      // compositeKey → run metadata
-	AllTestDetails  map[string][]internal.TestDetail // testName → detail items
-	AllTestKeys     map[string]internal.StringSet    // compositeKey → set of ALL test base keys (passed+failed)
-	MasterFailed    internal.StringSet               // tests failing in master
-	AllBranchRunIDs []int                            // ALL completed run IDs for the branch
-	OrderedKeys     []string                         // composite keys in chronological order (oldest first)
-}
+import "release-engineer-helper/internal/models"
 
 // RunProcessResult holds the result of processing a single run.
 type RunProcessResult struct {
 	RunID      int
 	Run        ghWorkflowRun
-	Details    map[string][]internal.TestDetail
+	Details    map[string][]models.TestDetail
 	HasNoTests bool
 	Err        error
 }

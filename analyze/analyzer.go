@@ -4,13 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"release-engineer-helper/v0.1/collect"
-	"release-engineer-helper/v0.1/internal"
+	"release-engineer-helper/internal/models"
 )
 
 // Run executes the Analyze phase. Pure computation, no I/O.
 // Exact port of Python's TestAnalysisResults methods.
-func Run(cr *collect.CollectResult) *AnalyzeResult {
+func Run(cr *models.CollectResult) *models.AnalyzeResult {
 	behavior := analyzeTestBehavior(cr)
 	diffs := getRunDiffs(cr)
 	stats := getStatistics(cr)
@@ -18,7 +17,7 @@ func Run(cr *collect.CollectResult) *AnalyzeResult {
 	fmt.Printf("  [analyze] Results: %d stable failing, %d fixed, %d flaky\n",
 		len(behavior.StableFailing), len(behavior.FixedTests), len(behavior.FlakyTests))
 
-	return &AnalyzeResult{
+	return &models.AnalyzeResult{
 		Behavior: behavior,
 		RunDiffs: diffs,
 		Stats:    stats,
@@ -39,7 +38,7 @@ func baseTestKey(testName string) string {
 // For runs without AllTestKeys data (e.g. old cache entries), the per-run guard
 // `namesForRun.Len() > 0` in analyzeTestBehavior falls back to TestPassed,
 // preserving backward-compatible behavior.
-func hasAllTestKeys(cr *collect.CollectResult) bool {
+func hasAllTestKeys(cr *models.CollectResult) bool {
 	for _, names := range cr.AllTestKeys {
 		if names.Len() > 0 {
 			return true
@@ -50,17 +49,17 @@ func hasAllTestKeys(cr *collect.CollectResult) bool {
 
 // analyzeTestBehavior builds a state matrix for each test across all runs
 // and classifies behavior.
-func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
+func analyzeTestBehavior(cr *models.CollectResult) models.BehaviorAnalysis {
 	if len(cr.Summary) == 0 {
-		return BehaviorAnalysis{
-			StableFailing: make(map[string]*TestBehavior),
-			FixedTests:    make(map[string]*TestBehavior),
-			FlakyTests:    make(map[string]*TestBehavior),
+		return models.BehaviorAnalysis{
+			StableFailing: make(map[string]*models.TestBehavior),
+			FixedTests:    make(map[string]*models.TestBehavior),
+			FlakyTests:    make(map[string]*models.TestBehavior),
 		}
 	}
 
 	// Collect all unique test names
-	allTests := internal.NewStringSet()
+	allTests := models.NewStringSet()
 	for _, failedSet := range cr.Summary {
 		for t := range failedSet {
 			allTests.Add(t)
@@ -95,9 +94,9 @@ func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 		testStates[t] = states
 	}
 
-	stableFailing := make(map[string]*TestBehavior)
-	fixedTests := make(map[string]*TestBehavior)
-	flakyTests := make(map[string]*TestBehavior)
+	stableFailing := make(map[string]*models.TestBehavior)
+	fixedTests := make(map[string]*models.TestBehavior)
+	flakyTests := make(map[string]*models.TestBehavior)
 
 	for test, states := range testStates {
 		behavior := analyzeTestPattern(test, states, orderedKeys, cr)
@@ -112,7 +111,7 @@ func analyzeTestBehavior(cr *collect.CollectResult) BehaviorAnalysis {
 		// never_failed is not stored
 	}
 
-	return BehaviorAnalysis{
+	return models.BehaviorAnalysis{
 		StableFailing: stableFailing,
 		FixedTests:    fixedTests,
 		FlakyTests:    flakyTests,
@@ -161,7 +160,7 @@ func ComputePatternStats(states []TestState) PatternStats {
 //   - test never present in any run                  → absent
 //   - present earlier, but missing from the latest   → undefined
 //     (could be removed, renamed, filtered out, or
-//      simply absent from the artifact — we can't tell)
+//     simply absent from the artifact — we can't tell)
 //   - present, never failed                          → never_failed
 //   - 1 session ending on the last present run       → stable_failing
 //   - 1 session ending earlier                       → fixed
@@ -207,13 +206,13 @@ func BuildPattern(states []TestState) string {
 // See ClassifyStates for the canonical classification rules. Only stable_failing,
 // fixed and flaky behaviours are stored downstream; absent / undefined /
 // never_failed are not considered actively-failing tests.
-func analyzeTestPattern(testName string, states []TestState, compositeKeys []string, cr *collect.CollectResult) *TestBehavior {
+func analyzeTestPattern(testName string, states []TestState, compositeKeys []string, cr *models.CollectResult) *models.TestBehavior {
 	stats := ComputePatternStats(states)
 	failCount := stats.FailCount
 	presentCount := stats.PresentCount
 
 	if failCount == 0 {
-		return &TestBehavior{Type: "never_failed"}
+		return &models.TestBehavior{Type: "never_failed"}
 	}
 
 	totalRuns := len(states)
@@ -230,7 +229,7 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 	}
 
 	// Collect failed run info
-	var failedRuns []FailedRunInfo
+	var failedRuns []models.FailedRunInfo
 	for i, s := range states {
 		if s != TestFailed {
 			continue
@@ -244,7 +243,7 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 				sha = parts[0]
 			}
 		}
-		failedRuns = append(failedRuns, FailedRunInfo{
+		failedRuns = append(failedRuns, models.FailedRunInfo{
 			SHA:          sha,
 			CompositeKey: key,
 			Meta:         meta,
@@ -254,7 +253,7 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 
 	// Find PR/commit info for the first present run after last failure
 	var nextPRLink string
-	var nextCommitInfo *CommitInfo
+	var nextCommitInfo *models.CommitInfo
 	if lastFailIdx != nil {
 		for i := *lastFailIdx + 1; i < totalRuns; i++ {
 			if states[i] == TestNotPresent {
@@ -270,7 +269,7 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 					sha = parts[0]
 				}
 			}
-			nextCommitInfo = &CommitInfo{
+			nextCommitInfo = &models.CommitInfo{
 				SHA:   sha[:min(len(sha), 7)],
 				Title: nextMeta.Title,
 				TS:    nextMeta.Timestamp,
@@ -295,7 +294,7 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 
 	details := cr.AllTestDetails[testName]
 
-	return &TestBehavior{
+	return &models.TestBehavior{
 		Type:           behaviorType,
 		TestName:       testName,
 		TotalRuns:      totalRuns,
@@ -313,9 +312,9 @@ func analyzeTestPattern(testName string, states []TestState, compositeKeys []str
 
 // getRunDiffs computes the diff between consecutive runs.
 // Exact port of Python's get_run_diffs().
-func getRunDiffs(cr *collect.CollectResult) []RunDiff {
-	var diffs []RunDiff
-	prev := internal.NewStringSet()
+func getRunDiffs(cr *models.CollectResult) []models.RunDiff {
+	var diffs []models.RunDiff
+	prev := models.NewStringSet()
 	var prevKey string
 
 	for _, compositeKey := range cr.OrderedKeys {
@@ -323,7 +322,7 @@ func getRunDiffs(cr *collect.CollectResult) []RunDiff {
 		added := curr.Difference(prev)
 		removed := prev.Difference(curr)
 
-		onlyHere := internal.NewStringSet()
+		onlyHere := models.NewStringSet()
 		if cr.MasterFailed.Len() > 0 {
 			onlyHere = curr.Difference(cr.MasterFailed)
 		}
@@ -342,7 +341,7 @@ func getRunDiffs(cr *collect.CollectResult) []RunDiff {
 			prevOrder = cr.Meta[prevKey].Order
 		}
 
-		diffs = append(diffs, RunDiff{
+		diffs = append(diffs, models.RunDiff{
 			SHA:          sha,
 			CompositeKey: compositeKey,
 			Meta:         meta,
@@ -363,12 +362,12 @@ func getRunDiffs(cr *collect.CollectResult) []RunDiff {
 
 // getStatistics computes aggregate statistics.
 // Exact port of Python's get_statistics().
-func getStatistics(cr *collect.CollectResult) Stats {
+func getStatistics(cr *models.CollectResult) models.Stats {
 	if len(cr.Summary) == 0 {
-		return Stats{}
+		return models.Stats{}
 	}
 
-	allFailed := internal.NewStringSet()
+	allFailed := models.NewStringSet()
 	for _, failedSet := range cr.Summary {
 		allFailed = allFailed.Union(failedSet)
 	}
@@ -378,7 +377,7 @@ func getStatistics(cr *collect.CollectResult) Stats {
 		newFailures = allFailed.Difference(cr.MasterFailed).Len()
 	}
 
-	return Stats{
+	return models.Stats{
 		TotalRuns:         len(cr.Summary),
 		UniqueFailedTests: allFailed.Len(),
 		MasterFailedTests: cr.MasterFailed.Len(),

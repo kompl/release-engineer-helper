@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"release-engineer-helper/v0.1/internal"
+	"release-engineer-helper/internal/models"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -14,8 +14,8 @@ import (
 
 // cachedTestEntry matches the Python schema's details_list item.
 type cachedTestEntry struct {
-	TestName string                `bson:"test_name"`
-	Items    []internal.TestDetail `bson:"items"`
+	TestName string              `bson:"test_name"`
+	Items    []models.TestDetail `bson:"items"`
 }
 
 // cachedDocument matches the storage schema.
@@ -76,7 +76,7 @@ func (c *Cache) Close() error {
 
 // CacheEntry holds the data loaded from cache.
 type CacheEntry struct {
-	Details     map[string][]internal.TestDetail
+	Details     map[string][]models.TestDetail
 	AllTestKeys []string
 	HasNoTests  bool
 }
@@ -108,7 +108,7 @@ func (c *Cache) Load(owner, repo string, runID int) (*CacheEntry, bool) {
 }
 
 // Save stores parsed results for a run (upsert).
-func (c *Cache) Save(owner, repo, branch string, runID int, details map[string][]internal.TestDetail, allTestKeys []string, hasNoTests bool) error {
+func (c *Cache) Save(owner, repo, branch string, runID int, details map[string][]models.TestDetail, allTestKeys []string, hasNoTests bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -134,8 +134,8 @@ func (c *Cache) Save(owner, repo, branch string, runID int, details map[string][
 }
 
 // FindEarliestRunWithTests finds the earliest run_id (from candidates) where each test appears.
-func (c *Cache) FindEarliestRunWithTests(owner, repo string, testNames []string, candidateRunIDs []int) map[string]StableSinceInfo {
-	result := make(map[string]StableSinceInfo)
+func (c *Cache) FindEarliestRunWithTests(owner, repo string, testNames []string, candidateRunIDs []int) map[string]models.StableSinceInfo {
+	result := make(map[string]models.StableSinceInfo)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -165,7 +165,7 @@ func (c *Cache) FindEarliestRunWithTests(owner, repo string, testNames []string,
 		}
 		err := c.coll.FindOne(ctx, filter, opts).Decode(&doc)
 		if err == nil {
-			result[testName] = StableSinceInfo{
+			result[testName] = models.StableSinceInfo{
 				RunID:     doc.RunID,
 				CreatedAt: doc.CreatedAt,
 			}
@@ -175,13 +175,7 @@ func (c *Cache) FindEarliestRunWithTests(owner, repo string, testNames []string,
 	return result
 }
 
-// StableSinceInfo holds the earliest run info for a stable-failing test.
-type StableSinceInfo struct {
-	RunID     int    `json:"run_id"`
-	CreatedAt string `json:"created_at"`
-}
-
-func encodeDetails(details map[string][]internal.TestDetail) []cachedTestEntry {
+func encodeDetails(details map[string][]models.TestDetail) []cachedTestEntry {
 	if len(details) == 0 {
 		return nil
 	}
@@ -195,11 +189,11 @@ func encodeDetails(details map[string][]internal.TestDetail) []cachedTestEntry {
 	return entries
 }
 
-func decodeDetails(entries []cachedTestEntry) map[string][]internal.TestDetail {
+func decodeDetails(entries []cachedTestEntry) map[string][]models.TestDetail {
 	if len(entries) == 0 {
 		return nil
 	}
-	details := make(map[string][]internal.TestDetail, len(entries))
+	details := make(map[string][]models.TestDetail, len(entries))
 	for _, e := range entries {
 		details[e.TestName] = e.Items
 	}

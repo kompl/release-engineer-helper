@@ -10,13 +10,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"release-engineer-helper/v0.1/analyze"
-	"release-engineer-helper/v0.1/config"
-	"release-engineer-helper/v0.1/internal"
+	"release-engineer-helper/config"
+	"release-engineer-helper/internal/models"
 )
 
 // RenderJSON generates the combined JSON report for all repo/branch pairs.
-func RenderJSON(results []RepoResult, cfg *config.Config) error {
+func RenderJSON(results []models.RepoResult, cfg *config.Config) error {
 	now := time.Now()
 	report := jsonReport{
 		GeneratedAt: now.Format(time.RFC3339),
@@ -137,7 +136,7 @@ type jsonProbableFix struct {
 	RunLink     string `json:"run_link"`
 }
 
-func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
+func buildRepoJSONData(r models.RepoResult, cfg *config.Config) jsonProject {
 	cr := r.Collect
 	ar := r.Analyze
 
@@ -145,7 +144,7 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 	fixedTests := ar.Behavior.FixedTests
 	flakyTests := ar.Behavior.FlakyTests
 
-	allBehavior := make(map[string]*analyze.TestBehavior)
+	allBehavior := make(map[string]*models.TestBehavior)
 	for k, v := range stableFailing {
 		allBehavior[k] = v
 	}
@@ -222,12 +221,12 @@ func buildRepoJSONData(r RepoResult, cfg *config.Config) jsonProject {
 // already mentioned in the failed_tests of latest_run / latest_run_with_test_results
 // (fixed tests and flaky/stable ones that did not fail in those runs).
 func buildAdditional(
-	r RepoResult,
+	r models.RepoResult,
 	project jsonProject,
-	allBehavior map[string]*analyze.TestBehavior,
-	latestMeta internal.RunMeta,
+	allBehavior map[string]*models.TestBehavior,
+	latestMeta models.RunMeta,
 ) []jsonFailedTest {
-	mentioned := internal.NewStringSet()
+	mentioned := models.NewStringSet()
 	for _, t := range project.LatestRun.FailedTests {
 		mentioned.Add(t.TestName)
 	}
@@ -237,7 +236,7 @@ func buildAdditional(
 		}
 	}
 
-	rest := internal.NewStringSet()
+	rest := models.NewStringSet()
 	for testName := range allBehavior {
 		if !mentioned.Contains(testName) {
 			rest.Add(testName)
@@ -260,10 +259,10 @@ func buildAdditional(
 // withHistory adds last_failed / probable_fix — retrospective fields that only
 // make sense for tests not taken from the run being described.
 func buildFailedTests(
-	r RepoResult,
-	failedSet internal.StringSet,
-	allBehavior map[string]*analyze.TestBehavior,
-	runMeta internal.RunMeta,
+	r models.RepoResult,
+	failedSet models.StringSet,
+	allBehavior map[string]*models.TestBehavior,
+	runMeta models.RunMeta,
 	withHistory bool,
 ) []jsonFailedTest {
 	cr := r.Collect
@@ -379,7 +378,7 @@ func buildFailedTests(
 	return failedTests
 }
 
-func extractError(items []internal.TestDetail) string {
+func extractError(items []models.TestDetail) string {
 	if len(items) == 0 {
 		return ""
 	}
@@ -395,14 +394,14 @@ func extractError(items []internal.TestDetail) string {
 	return msg
 }
 
-func extractProject(items []internal.TestDetail) string {
+func extractProject(items []models.TestDetail) string {
 	if len(items) == 0 {
 		return ""
 	}
 	return items[0].Project
 }
 
-func classifyTest(testName string, stable, fixed, flaky map[string]*analyze.TestBehavior) string {
+func classifyTest(testName string, stable, fixed, flaky map[string]*models.TestBehavior) string {
 	if _, ok := stable[testName]; ok {
 		return "stable_failing"
 	}
@@ -417,7 +416,7 @@ func classifyTest(testName string, stable, fixed, flaky map[string]*analyze.Test
 
 // findStreakStart finds the run that started the current consecutive failure streak.
 // Port of Python's _find_streak_start().
-func findStreakStart(pattern string, orderedKeys []string, meta map[string]internal.RunMeta) *jsonProbableCause {
+func findStreakStart(pattern string, orderedKeys []string, meta map[string]models.RunMeta) *jsonProbableCause {
 	if pattern == "" {
 		return nil
 	}

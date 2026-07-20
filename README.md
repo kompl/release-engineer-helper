@@ -25,8 +25,11 @@ Parse   → Collect → Analyze → Enrich → Render
 ## Структура проекта
 
 ```
-v2/
-├── main.go                        # Точка входа, оркестрация фаз
+├── cmd/
+│   ├── bambai/
+│   │   └── main.go                # Точка входа, оркестрация фаз, composition root
+│   ├── rate-limit/                # Утилита проверки GitHub rate limit
+│   └── test-history/              # Утилита анализа истории теста по MongoDB-кэшу
 ├── config.yaml                    # Конфигурация
 ├── config/
 │   └── config.go                  # Загрузка YAML-конфигурации
@@ -38,21 +41,25 @@ v2/
 │   ├── cache.go                   # MongoDB-кэш результатов парсинга
 │   ├── extractor_logs.go          # Извлечение результатов из zip-логов
 │   ├── extractor_artifacts.go     # Извлечение результатов из JUnit XML артефактов
-│   └── models.go                  # CollectResult, RunMeta, вспомогательные структуры
+│   └── models.go                  # Внутренние структуры сборщика (gh*-типы)
 ├── analyze/
 │   ├── analyzer.go                # Классификация поведения тестов, diff, статистика
-│   └── models.go                  # AnalyzeResult, BehaviorAnalysis, RunDiff
+│   └── models.go                  # TestState
 ├── enrich/
-│   ├── enricher.go                # Поиск stable_since в MongoDB
-│   └── models.go                  # EnrichResult
+│   └── enricher.go                # Поиск stable_since через интерфейс StableSinceFinder
 ├── render/
 │   ├── renderer.go                # Параллельная оркестрация HTML + JSON
 │   ├── html.go                    # Построение данных для HTML-шаблона
 │   ├── json.go                    # Генерация JSON-отчёта
 │   └── report.html.tmpl           # Go html/template шаблон отчёта
-└── internal/
-    └── models.go                  # Общие типы: StringSet, TestDetail, RunMeta
+├── internal/
+│   └── models/                    # Контрактные типы фаз: CollectResult, AnalyzeResult,
+│                                  #   EnrichResult, RepoResult + StringSet, TestDetail, RunMeta
+└── .go-arch-lint.yml              # Архитектурный линтер: разрешённый граф зависимостей
 ```
+
+Фазы пайплайна не импортируют друг друга — общаются только через типы из
+`internal/models`. Граф зависимостей проверяется `go-arch-lint` (`make lint`).
 
 ## Требования
 
@@ -75,8 +82,9 @@ MongoDB будет доступна на `localhost:27017` (логин: `root`, 
 ### 2. Сборка
 
 ```bash
-cd v2
-go build -o release-engineer-helper .
+make build            # → ./bambai
+# или напрямую:
+go build -o bambai ./cmd/bambai
 ```
 
 ### 3. Конфигурация
@@ -87,7 +95,7 @@ go build -o release-engineer-helper .
 
 ```bash
 export GITHUB_TOKEN="ghp_..."
-./release-engineer-helper -config config.yaml
+./bambai --config config.yaml
 ```
 
 Токен читается **только** из переменной окружения `GITHUB_TOKEN`. В конфигурационном файле токен не хранится.

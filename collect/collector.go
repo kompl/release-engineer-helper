@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"release-engineer-helper/v0.1/config"
-	"release-engineer-helper/v0.1/internal"
+	"release-engineer-helper/config"
+	"release-engineer-helper/internal/models"
 )
 
 const maxPages = 10
 
 // Run executes the Collect phase for a single repo/branch.
 // onProgress is called each time a valid run is collected (may be nil).
-func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, onProgress func()) *CollectResult {
+func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, onProgress func()) *models.CollectResult {
 	gh := NewGitHubClient(token, cfg.GitHub.Owner, cfg.GitHub.WorkflowFile)
 	src := newRunSource(gh, repo)
 
@@ -28,7 +28,7 @@ func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, on
 	owner := cfg.GitHub.Owner
 
 	// --- Master failed tests ---
-	masterFailed := internal.NewStringSet()
+	masterFailed := models.NewStringSet()
 	if branch != cfg.Analysis.MasterBranch {
 		fmt.Printf("  [collect] Looking for failed tests in '%s'...\n", cfg.Analysis.MasterBranch)
 		masterFailed = getMasterFailed(src, cache, logExtractor, artifactExtractor, owner, cfg.Analysis.MasterBranch, forceRefresh)
@@ -63,7 +63,7 @@ func Run(token string, cfg *config.Config, cache *Cache, repo, branch string, on
 
 type processedRun struct {
 	run         ghWorkflowRun
-	details     map[string][]internal.TestDetail
+	details     map[string][]models.TestDetail
 	allTestKeys []string // base keys of ALL tests (passed+failed)
 	title       string
 }
@@ -77,7 +77,7 @@ type candidateRun struct {
 // runResult is the outcome of processing a single candidate.
 type runResult struct {
 	candidate   candidateRun
-	details     map[string][]internal.TestDetail
+	details     map[string][]models.TestDetail
 	allTestKeys []string
 	title       string
 	valid       bool
@@ -265,30 +265,30 @@ func getMasterFailed(
 	src *runSource, cache *Cache,
 	logExt *LogExtractor, artExt *ArtifactExtractor,
 	owner, masterBranch string, forceRefresh bool,
-) internal.StringSet {
+) models.StringSet {
 	run := src.latestCompletedRun(masterBranch)
 	if run == nil {
-		return internal.NewStringSet()
+		return models.NewStringSet()
 	}
 
 	entry := loadOrExtract(cache, logExt, artExt, src, owner, run.HeadBranch, run.ID, forceRefresh)
 	if entry.HasNoTests || len(entry.Details) == 0 {
-		return internal.NewStringSet()
+		return models.NewStringSet()
 	}
 
-	result := internal.NewStringSet()
+	result := models.NewStringSet()
 	for testName := range entry.Details {
 		result.Add(testName)
 	}
 	return result
 }
 
-func buildSummary(src *runSource, runs []processedRun) *CollectResult {
-	result := &CollectResult{
-		Summary:        make(map[string]internal.StringSet),
-		Meta:           make(map[string]internal.RunMeta),
-		AllTestDetails: make(map[string][]internal.TestDetail),
-		AllTestKeys:    make(map[string]internal.StringSet),
+func buildSummary(src *runSource, runs []processedRun) *models.CollectResult {
+	result := &models.CollectResult{
+		Summary:        make(map[string]models.StringSet),
+		Meta:           make(map[string]models.RunMeta),
+		AllTestDetails: make(map[string][]models.TestDetail),
+		AllTestKeys:    make(map[string]models.StringSet),
 	}
 
 	var orderedKeys []string
@@ -325,7 +325,7 @@ func buildSummary(src *runSource, runs []processedRun) *CollectResult {
 			return oi < oj
 		})
 
-		failedSet := internal.NewStringSet(failedOrder...)
+		failedSet := models.NewStringSet(failedOrder...)
 
 		// Merge test details (append, not overwrite — same test may fail in multiple runs)
 		for testName, items := range pr.details {
@@ -334,9 +334,9 @@ func buildSummary(src *runSource, runs []processedRun) *CollectResult {
 
 		result.Summary[compositeKey] = failedSet
 		if len(pr.allTestKeys) > 0 {
-			result.AllTestKeys[compositeKey] = internal.NewStringSet(pr.allTestKeys...)
+			result.AllTestKeys[compositeKey] = models.NewStringSet(pr.allTestKeys...)
 		}
-		result.Meta[compositeKey] = internal.RunMeta{
+		result.Meta[compositeKey] = models.RunMeta{
 			SHA:          sha,
 			RunID:        runID,
 			Title:        title,

@@ -1,0 +1,70 @@
+version: 3
+workdir: .
+
+allow:
+  depOnAnyVendor: false
+  # deepScan запрещал бы передачу *collect.Cache в enrich.RunForRepo из main —
+  # а это осознанный composition root: enrich объявляет интерфейс StableSinceFinder,
+  # main подставляет реализацию. Проверяем только граф импортов.
+  deepScan: false
+
+excludeFiles:
+  - "^.*_test\\.go$"
+
+vendors:
+  mongo: { in: go.mongodb.org/mongo-driver/** }
+  yaml:  { in: gopkg.in/yaml.v3 }
+  mpb:   { in: github.com/vbauerster/mpb/** }
+
+components:
+  bambai:       { in: cmd/bambai }
+  rate-limit:   { in: cmd/rate-limit }
+  test-history: { in: cmd/test-history }
+  config:       { in: config }
+  parse:        { in: parse }
+  models:       { in: internal/models }
+  collect:      { in: collect }
+  analyze:      { in: analyze }
+  enrich:       { in: enrich }
+  render:       { in: render }
+
+commonComponents:
+  - models
+
+deps:
+  # Оркестратор пайплайна: единственный, кто видит все фазы.
+  bambai:
+    mayDependOn:
+      - config
+      - parse
+      - collect
+      - analyze
+      - enrich
+      - render
+    canUse:
+      - mpb
+
+  # Вспомогательная утилита анализа истории тестов из MongoDB-кэша.
+  test-history:
+    mayDependOn:
+      - analyze
+    canUse:
+      - mongo
+
+  # Фазы пайплайна общаются только через контракты в internal/models:
+  # collect не знает про analyze, analyze про enrich и т.д.
+  collect:
+    mayDependOn:
+      - config
+    canUse:
+      - mongo
+
+  render:
+    mayDependOn:
+      - config
+
+  config:
+    canUse:
+      - yaml
+
+  # parse, analyze, enrich, rate-limit: только stdlib + models — записей не требуют.

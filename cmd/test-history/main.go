@@ -7,8 +7,9 @@
 // found in the cache.
 //
 // Usage:
-//   go run ./cmd/test-history --repo hydra-server --test "JobScheduleRoutesSpecIO" --base-key
-//   go run ./cmd/test-history --repo hocs --branch master --test "test_billing" --base-key
+//
+//	go run ./cmd/test-history --repo hydra-server --test "JobScheduleRoutesSpecIO" --base-key
+//	go run ./cmd/test-history --repo hocs --branch master --test "test_billing" --base-key
 package main
 
 import (
@@ -26,7 +27,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"release-engineer-helper/v0.1/analyze"
+	"release-engineer-helper/analyze"
 )
 
 type runDoc struct {

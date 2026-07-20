@@ -3,14 +3,19 @@ package enrich
 import (
 	"fmt"
 
-	"release-engineer-helper/v0.1/analyze"
-	"release-engineer-helper/v0.1/collect"
+	"release-engineer-helper/internal/models"
 )
 
+// StableSinceFinder locates the earliest run in which each test appears.
+// *collect.Cache satisfies it; tests substitute a fake.
+type StableSinceFinder interface {
+	FindEarliestRunWithTests(owner, repo string, testNames []string, candidateRunIDs []int) map[string]models.StableSinceInfo
+}
+
 // RunForRepo executes the Enrich phase for a specific repo.
-func RunForRepo(cache *collect.Cache, owner string, cr *collect.CollectResult, ar *analyze.AnalyzeResult, repo string) *EnrichResult {
-	result := &EnrichResult{
-		StableSince: make(map[string]collect.StableSinceInfo),
+func RunForRepo(finder StableSinceFinder, owner string, cr *models.CollectResult, ar *models.AnalyzeResult, repo string) *models.EnrichResult {
+	result := &models.EnrichResult{
+		StableSince: make(map[string]models.StableSinceInfo),
 	}
 
 	if len(ar.Behavior.StableFailing) == 0 {
@@ -24,7 +29,7 @@ func RunForRepo(cache *collect.Cache, owner string, cr *collect.CollectResult, a
 		testNames = append(testNames, name)
 	}
 
-	result.StableSince = cache.FindEarliestRunWithTests(
+	result.StableSince = finder.FindEarliestRunWithTests(
 		owner,
 		repo,
 		testNames,

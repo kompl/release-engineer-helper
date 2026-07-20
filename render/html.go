@@ -10,14 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"release-engineer-helper/v0.1/analyze"
-	"release-engineer-helper/v0.1/collect"
-	"release-engineer-helper/v0.1/config"
-	"release-engineer-helper/v0.1/internal"
+	"release-engineer-helper/config"
+	"release-engineer-helper/internal/models"
 )
 
 // RenderHTML generates the HTML report for a single repo/branch.
-func RenderHTML(r RepoResult, cfg *config.Config) error {
+func RenderHTML(r models.RepoResult, cfg *config.Config) error {
 	cr := r.Collect
 	ar := r.Analyze
 
@@ -29,7 +27,7 @@ func RenderHTML(r RepoResult, cfg *config.Config) error {
 	reportPath := filepath.Join(branchDir, fmt.Sprintf("failed_tests_%s.html", r.Repo))
 
 	// Build behavior map for leaf labels
-	behaviorMap := make(map[string]*analyze.TestBehavior)
+	behaviorMap := make(map[string]*models.TestBehavior)
 	for name, b := range ar.Behavior.StableFailing {
 		behaviorMap[name] = b
 	}
@@ -140,9 +138,9 @@ type htmlLeaf struct {
 }
 
 func buildHTMLRuns(
-	cr *collect.CollectResult,
-	ar *analyze.AnalyzeResult,
-	behaviorMap map[string]*analyze.TestBehavior,
+	cr *models.CollectResult,
+	ar *models.AnalyzeResult,
+	behaviorMap map[string]*models.TestBehavior,
 	branch, masterBranch string,
 ) []htmlRun {
 	var runs []htmlRun
@@ -188,7 +186,7 @@ func buildHTMLRuns(
 	return runs
 }
 
-func buildBehaviorRun(title string, tests map[string]*analyze.TestBehavior, cr *collect.CollectResult, behaviorMap map[string]*analyze.TestBehavior, branch, masterBranch string) htmlRun {
+func buildBehaviorRun(title string, tests map[string]*models.TestBehavior, cr *models.CollectResult, behaviorMap map[string]*models.TestBehavior, branch, masterBranch string) htmlRun {
 	var items []string
 	for testName := range tests {
 		items = append(items, testName)
@@ -200,7 +198,7 @@ func buildBehaviorRun(title string, tests map[string]*analyze.TestBehavior, cr *
 	}
 }
 
-func buildFixedRun(title string, tests map[string]*analyze.TestBehavior) htmlRun {
+func buildFixedRun(title string, tests map[string]*models.TestBehavior) htmlRun {
 	var leaves []htmlLeaf
 	for testName, info := range tests {
 		label := testName
@@ -219,7 +217,7 @@ func buildFixedRun(title string, tests map[string]*analyze.TestBehavior) htmlRun
 	}
 }
 
-func buildFlakyRun(title string, tests map[string]*analyze.TestBehavior) htmlRun {
+func buildFlakyRun(title string, tests map[string]*models.TestBehavior) htmlRun {
 	var leaves []htmlLeaf
 	for testName, info := range tests {
 		failRate := 0.0
@@ -247,9 +245,9 @@ func buildTreeSection(
 	title string,
 	items []string,
 	section string,
-	behaviorMap map[string]*analyze.TestBehavior,
-	masterFailed internal.StringSet,
-	allTestDetails map[string][]internal.TestDetail,
+	behaviorMap map[string]*models.TestBehavior,
+	masterFailed models.StringSet,
+	allTestDetails map[string][]models.TestDetail,
 	branch, masterBranch string,
 ) htmlSection {
 	var leaves []htmlLeaf
@@ -270,8 +268,8 @@ func buildTreeSection(
 // Port of Python's build_leaf_label() from report_service.py lines 188-216.
 func buildLeafLabel(
 	testName, section string,
-	behaviorMap map[string]*analyze.TestBehavior,
-	masterFailed internal.StringSet,
+	behaviorMap map[string]*models.TestBehavior,
+	masterFailed models.StringSet,
 	branch, masterBranch string,
 ) htmlLeaf {
 	marker := ""
@@ -408,7 +406,7 @@ func groupIntoTree(leaves []htmlLeaf) []htmlTreeNode {
 	return root
 }
 
-func filterOrdered(order []string, set internal.StringSet) []string {
+func filterOrdered(order []string, set models.StringSet) []string {
 	var result []string
 	for _, t := range order {
 		if set.Contains(t) {

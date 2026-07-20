@@ -9,7 +9,7 @@ import (
 	"log"
 	"strings"
 
-	"release-engineer-helper/v0.1/internal"
+	"release-engineer-helper/internal/models"
 )
 
 // ArtifactExtractor parses JUnit XML from GitHub Actions artifacts.
@@ -25,7 +25,7 @@ func NewArtifactExtractor(gh *GitHubClient) *ArtifactExtractor {
 
 // ExtractResult holds the results of artifact extraction.
 type ExtractResult struct {
-	Details     map[string][]internal.TestDetail
+	Details     map[string][]models.TestDetail
 	AllTestKeys []string // base keys (classname::name) for ALL tests, including passed
 	HasNoTests  bool
 }
@@ -56,7 +56,7 @@ func (ae *ArtifactExtractor) Extract(repo string, runID int) *ExtractResult {
 		return &ExtractResult{HasNoTests: true}
 	}
 
-	combined := make(map[string][]internal.TestDetail)
+	combined := make(map[string][]models.TestDetail)
 	allKeysSet := make(map[string]struct{})
 	foundAnyJUnit := false
 	globalPos := 0
@@ -134,7 +134,7 @@ type junitFailure struct {
 
 // junitZipResult holds the results of parsing a JUnit zip.
 type junitZipResult struct {
-	failed      map[string][]internal.TestDetail
+	failed      map[string][]models.TestDetail
 	allTestKeys []string // base keys (classname::name) for ALL tests
 	hasJUnit    bool
 }
@@ -146,7 +146,7 @@ func (ae *ArtifactExtractor) parseJUnitZip(zipBytes []byte, project string) juni
 		return junitZipResult{}
 	}
 
-	failed := make(map[string][]internal.TestDetail)
+	failed := make(map[string][]models.TestDetail)
 	allKeysSet := make(map[string]struct{})
 	foundAnyJUnit := false
 	seenOrder := make(map[string]int)
@@ -194,7 +194,7 @@ func (ae *ArtifactExtractor) parseJUnitZip(zipBytes []byte, project string) juni
 
 				testName := testKey + " | " + message
 
-				failed[testName] = append(failed[testName], internal.TestDetail{
+				failed[testName] = append(failed[testName], models.TestDetail{
 					File:       f.Name,
 					LineNum:    0,
 					Context:    context,

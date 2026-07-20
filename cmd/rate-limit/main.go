@@ -2,8 +2,9 @@
 // The /rate_limit endpoint itself does not consume the core budget.
 //
 // Usage:
-//   GITHUB_TOKEN=ghp_xxx go run ./cmd/rate-limit
-//   go run ./cmd/rate-limit -token ghp_xxx
+//
+//	GITHUB_TOKEN=ghp_xxx go run ./cmd/rate-limit
+//	go run ./cmd/rate-limit -token ghp_xxx
 package main
 
 import (
