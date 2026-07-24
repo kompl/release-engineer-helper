@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -238,5 +239,51 @@ func TestRenderJSONWritesReport(t *testing.T) {
 	}
 	if _, ok := report.Projects["hoper/v6.3"]; !ok {
 		t.Errorf("projects keys = %v, want hoper/v6.3", report.Projects)
+	}
+}
+
+func TestRenderJSONToWriterLeavesNoFile(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+
+	if err := RenderJSONTo(&buf, []models.RepoResult{makeRepoResult()}, testConfig(dir)); err != nil {
+		t.Fatalf("RenderJSONTo: %v", err)
+	}
+
+	var report struct {
+		GeneratedAt string                     `json:"generated_at"`
+		Projects    map[string]json.RawMessage `json:"projects"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &report); err != nil {
+		t.Fatalf("stdout payload is not valid JSON: %v", err)
+	}
+	if _, ok := report.Projects["hoper/v6.3"]; !ok {
+		t.Errorf("projects keys = %v, want hoper/v6.3", report.Projects)
+	}
+	if !strings.HasSuffix(buf.String(), "\n") {
+		t.Error("вывод должен заканчиваться переводом строки")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("output.dir должен остаться пустым, найдено: %v", entries)
+	}
+}
+
+func TestRenderAllStdoutBypassesGenerateJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	cfg.Output.GenerateHTML = false
+	cfg.Output.GenerateJSON = false // явный получатель важнее ключа конфига
+
+	var buf bytes.Buffer
+	if err := RenderAll([]models.RepoResult{makeRepoResult()}, cfg, &buf); err != nil {
+		t.Fatalf("RenderAll: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Error("RenderAll с явным jsonOut обязан напечатать отчёт")
 	}
 }

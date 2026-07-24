@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,16 +35,42 @@ type OutputConfig struct {
 type InputConfig struct {
 	LogFile          string   `yaml:"log_file"`
 	RepoBranchesFile string   `yaml:"repo_branches_file"`
+	ProjectsFile     string   `yaml:"projects_file"`
 	IgnoreTasks      []string `yaml:"ignore_tasks"`
 }
 
 type Config struct {
-	GitHub    GitHubConfig   `yaml:"github"`
-	Mongo     MongoConfig    `yaml:"mongo"`
-	Analysis  AnalysisConfig `yaml:"analysis"`
-	Output    OutputConfig   `yaml:"output"`
-	SkipParse bool           `yaml:"skip_parse"`
-	Input     InputConfig    `yaml:"input"`
+	GitHub   GitHubConfig   `yaml:"github"`
+	Mongo    MongoConfig    `yaml:"mongo"`
+	Analysis AnalysisConfig `yaml:"analysis"`
+	Output   OutputConfig   `yaml:"output"`
+	Input    InputConfig    `yaml:"input"`
+
+	// DeprecatedSkipParse отражает устаревший ключ skip_parse. На пайплайн не
+	// влияет — точку входа задают флаги --by-log / --by-json; указатель нужен,
+	// чтобы отличить отсутствие ключа от skip_parse: false и предупредить.
+	DeprecatedSkipParse *bool `yaml:"skip_parse"`
+}
+
+// DefaultPath returns the config path used when --config is omitted: config.yaml
+// in the working directory, falling back to the one next to the binary. The
+// symlink is resolved, so a bambai linked into /usr/local/bin finds the config
+// of the project it was built in and runs from any directory.
+func DefaultPath() string {
+	const name = "config.yaml"
+
+	if _, err := os.Stat(name); err == nil {
+		return name
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return name
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Join(filepath.Dir(exe), name)
 }
 
 func Load(path string) (*Config, error) {
@@ -75,6 +102,7 @@ func Load(path string) (*Config, error) {
 		Input: InputConfig{
 			LogFile:          "1.log",
 			RepoBranchesFile: "repo_branches.json",
+			ProjectsFile:     "projects.json",
 		},
 	}
 

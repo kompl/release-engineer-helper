@@ -3,6 +3,7 @@ package render
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	"release-engineer-helper/config"
@@ -10,8 +11,10 @@ import (
 )
 
 // RenderAll generates HTML reports (one per repo/branch) and a combined JSON report
-// in parallel.
-func RenderAll(results []models.RepoResult, cfg *config.Config) error {
+// in parallel. When jsonOut is non-nil the JSON report goes there instead of a
+// file in output.dir, and output.generate_json is bypassed — an explicit
+// destination is a request for the report.
+func RenderAll(results []models.RepoResult, cfg *config.Config, jsonOut io.Writer) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var errs []error
@@ -32,11 +35,17 @@ func RenderAll(results []models.RepoResult, cfg *config.Config) error {
 	}
 
 	// JSON report — one goroutine for combined report
-	if cfg.Output.GenerateJSON {
+	if jsonOut != nil || cfg.Output.GenerateJSON {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := RenderJSON(results, cfg); err != nil {
+
+			render := func() error { return RenderJSON(results, cfg) }
+			if jsonOut != nil {
+				render = func() error { return RenderJSONTo(jsonOut, results, cfg) }
+			}
+
+			if err := render(); err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("JSON: %w", err))
 				mu.Unlock()

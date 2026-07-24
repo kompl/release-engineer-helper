@@ -1,0 +1,166 @@
+{
+  "hydra-core": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hydra-server": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hoper": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hupo": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hard": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hid": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hpd": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hpay": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hamd": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hsnmp": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hmed": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hocs": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hccp": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hex": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "imprint": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hcd": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "homs": [
+    "master",
+    "v2.9",
+    "v2.8",
+    "v2.7"
+  ],
+  "camunda-ext": [
+    "master",
+    "v1.5"
+  ],
+  "camunda-ext-2": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "bitrix24-addons": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hydra-core-migr": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hydra-migration": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hydra-users-syncer": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hcr": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "clients-stuff": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hydra-customer-connection-request": [
+    "main",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ],
+  "hydra-messages-relay": [
+    "master",
+    "v6.3"
+  ],
+  "hydra-external-syncer": [
+    "master",
+    "v6.3",
+    "v6.2.1",
+    "v6.2"
+  ]
+}

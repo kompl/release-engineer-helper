@@ -63,7 +63,7 @@ Parse  -->  Collect  -->  Analyze  -->  Enrich  -->  Render
 6. Дедуплицирует ветки (несколько версий могут давать одну ветку), сортирует.
 7. Сохраняет результат в `repo_branches.json`.
 
-**Опциональность:** если `skip_parse: true` в конфиге — фаза пропускается, `repo_branches.json` загружается напрямую.
+**Опциональность:** фаза выполняется только в режиме запуска `--by-log`. В режиме `--by-json` (по умолчанию) `repo_branches.json` загружается напрямую, в режиме `-p <проект> [-b <ветка> ...]` карта `map[repo][]branch` строится в памяти из справочника `projects.json` и флагов, не касаясь `repo_branches.json`. Режимы взаимоисключающие; выбор и валидация — в `cmd/bambai/scope.go` (`scopeMode`, `resolveProjectScope`), до подключения к MongoDB и походов в GitHub.
 
 ---
 
@@ -253,6 +253,8 @@ type RepoResult struct {
 - Одну горутину для каждого repo/branch: `RenderHTML()` → `{output_dir}/{branch}/failed_tests_{repo}.html`
 - Одну горутину для JSON: `RenderJSON()` → `{output_dir}/report_{YYYYMMDD_HHMMSS}.json`
 
+`RenderAll` принимает `jsonOut io.Writer`: при `nil` JSON пишется в файл под ключом `output.generate_json`, при непустом получателе (флаг `--stdout`) — сериализуется в него через `RenderJSONTo()` и файл не создаётся. Сборка и маршалинг отчёта общие (`buildJSONReport`), различается только назначение. В режиме `--stdout` оркестратор подменяет `os.Stdout` на `os.Stderr`, поэтому весь человекочитаемый вывод и прогресс-бары уходят в stderr, а stdout остаётся чистым потоком JSON.
+
 **HTML-отчёт** содержит:
 1. Секции поведения: стабильно падающие / починенные / flaky тесты.
 2. Diff-секции для каждого запуска: новые / починенные / уникальные / все падения.
@@ -274,7 +276,9 @@ type RepoResult struct {
 ```
  config.yaml ──────────────────────────────────────────────────────┐
  GITHUB_TOKEN                                                       │
- 1.log ──► [Parse] ──► repo_branches.json                         │
+ --by-log:  1.log ──► [Parse] ──► repo_branches.json              │
+ --by-json: repo_branches.json                                    │
+ -p / -b:   projects.json ──► resolveProjectScope                 │
                                 │                                   │
                     map[repo][]branch                               │
                                 │                                   │

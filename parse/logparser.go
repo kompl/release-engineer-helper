@@ -101,15 +101,27 @@ func SaveRepoBranches(path string, repoBranches map[string][]string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// LoadRepoBranches reads repo→branches mapping from a JSON file.
+// LoadRepoBranches reads the repo→branches mapping of a single run from a JSON file.
 func LoadRepoBranches(path string) (map[string][]string, error) {
+	return loadRepoMap("repo_branches", path)
+}
+
+// LoadProjects reads the reference list of known repos and their branches from
+// a JSON file. Same format as repo_branches — the file is the source for the
+// -p/-b flags.
+func LoadProjects(path string) (map[string][]string, error) {
+	return loadRepoMap("projects", path)
+}
+
+// loadRepoMap decodes a repo→branches JSON file, naming the source in errors.
+func loadRepoMap(kind, path string) (map[string][]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read repo_branches file %s: %w", path, err)
+		return nil, fmt.Errorf("read %s file %s: %w", kind, path, err)
 	}
 	var result map[string][]string
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("parse repo_branches: %w", err)
+		return nil, fmt.Errorf("parse %s file %s: %w", kind, path, err)
 	}
 	return result, nil
 }

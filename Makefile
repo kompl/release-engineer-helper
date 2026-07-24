@@ -1,9 +1,14 @@
 GOPATH_BIN := $(shell go env GOPATH)/bin
 
-.PHONY: build build-all test test-live lint arch-lint vet
+.PHONY: build build-all install test test-live lint arch-lint vet
 
 build:
 	go build -o bambai ./cmd/bambai
+
+# Симлинк в PATH (нужен sudo). Бинарь остаётся в проекте: разыменовав симлинк,
+# bambai находит config.yaml рядом с собой и запускается из любой директории.
+install: build
+	sudo ln -sfn $(CURDIR)/bambai /usr/local/bin/bambai
 
 build-all: build
 	go build -o rate-limit ./cmd/rate-limit

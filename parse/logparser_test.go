@@ -99,3 +99,40 @@ func TestSaveLoadRepoBranchesRoundtrip(t *testing.T) {
 		t.Errorf("roundtrip = %v, want %v", got, want)
 	}
 }
+
+func TestLoadProjects(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "projects.json")
+	body := `{"hydra-server": ["master", "v6.3"], "homs": ["master"]}`
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadProjects(path)
+	if err != nil {
+		t.Fatalf("LoadProjects: %v", err)
+	}
+	want := map[string][]string{
+		"hydra-server": {"master", "v6.3"},
+		"homs":         {"master"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LoadProjects = %v, want %v", got, want)
+	}
+}
+
+func TestLoadProjectsMissingFile(t *testing.T) {
+	if _, err := LoadProjects(filepath.Join(t.TempDir(), "nope.json")); err == nil {
+		t.Error("LoadProjects on a missing file must return an error")
+	}
+}
+
+func TestLoadProjectsInvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "projects.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProjects(path); err == nil {
+		t.Error("LoadProjects on invalid JSON must return an error")
+	}
+}

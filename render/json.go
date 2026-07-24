@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,9 +15,46 @@ import (
 	"release-engineer-helper/internal/models"
 )
 
-// RenderJSON generates the combined JSON report for all repo/branch pairs.
+// RenderJSON generates the combined JSON report for all repo/branch pairs and
+// writes it to a timestamped file in output.dir.
 func RenderJSON(results []models.RepoResult, cfg *config.Config) error {
 	now := time.Now()
+
+	data, err := buildJSONReport(results, cfg, now)
+	if err != nil {
+		return err
+	}
+
+	filename := fmt.Sprintf("report_%s.json", now.Format("20060102_150405"))
+	reportPath := filepath.Join(cfg.Output.Dir, filename)
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+
+	if err := os.WriteFile(reportPath, data, 0644); err != nil {
+		return fmt.Errorf("write %s: %w", reportPath, err)
+	}
+
+	fmt.Printf("  [render] Generated JSON: %s\n", reportPath)
+	return nil
+}
+
+// RenderJSONTo writes the same combined JSON report to w, so callers can pipe
+// it (e.g. into jq) instead of leaving a file behind.
+func RenderJSONTo(w io.Writer, results []models.RepoResult, cfg *config.Config) error {
+	data, err := buildJSONReport(results, cfg, time.Now())
+	if err != nil {
+		return err
+	}
+
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write JSON report: %w", err)
+	}
+	return nil
+}
+
+// buildJSONReport assembles the report for all repo/branch pairs and marshals it.
+func buildJSONReport(results []models.RepoResult, cfg *config.Config, now time.Time) ([]byte, error) {
 	report := jsonReport{
 		GeneratedAt: now.Format(time.RFC3339),
 		Projects:    make(map[string]jsonProject),
@@ -27,23 +65,11 @@ func RenderJSON(results []models.RepoResult, cfg *config.Config) error {
 		report.Projects[key] = buildRepoJSONData(r, cfg)
 	}
 
-	filename := fmt.Sprintf("report_%s.json", now.Format("20060102_150405"))
-	reportPath := filepath.Join(cfg.Output.Dir, filename)
-	if err := os.MkdirAll(filepath.Dir(reportPath), 0755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
-	}
-
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
+		return nil, fmt.Errorf("marshal JSON: %w", err)
 	}
-
-	if err := os.WriteFile(reportPath, data, 0644); err != nil {
-		return fmt.Errorf("write %s: %w", reportPath, err)
-	}
-
-	fmt.Printf("  [render] Generated JSON: %s\n", reportPath)
-	return nil
+	return data, nil
 }
 
 type jsonReport struct {

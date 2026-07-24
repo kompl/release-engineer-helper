@@ -18,11 +18,10 @@ output:
   generate_html: true
   generate_json: true
 
-skip_parse: true
-
 input:
   log_file: "1.log"
   repo_branches_file: "repo_branches.json"
+  projects_file: "projects.json"
   ignore_tasks:
     - "ADM-3191"
     - "INT-570"

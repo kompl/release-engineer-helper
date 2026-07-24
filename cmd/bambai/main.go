@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -80,13 +81,78 @@ func (s *phaseState) collectBar() string {
 		s.collected, s.maxRuns)
 }
 
+// resolveRepoBranches builds the repo→branches map for the chosen mode. Each
+// mode touches only its own input file: modeProject never reads or writes
+// input.repo_branches_file, and the other two never read input.projects_file.
+func resolveRepoBranches(scope runScope, cfg *config.Config) (map[string][]string, error) {
+	switch scope.mode {
+	case modeByLog:
+		fmt.Println("\n=== Parse: Парсинг лога → repo_branches.json ===")
+		repoBranches, err := parse.ParseLog(cfg.Input.LogFile, cfg.Input.IgnoreTasks)
+		if err != nil {
+			return nil, fmt.Errorf("parse phase failed: %w", err)
+		}
+
+		if len(repoBranches) == 0 {
+			fmt.Println("  Не удалось извлечь данные из лога")
+			fmt.Println("=== Parse завершена ===")
+			return nil, nil
+		}
+
+		if err := parse.SaveRepoBranches(cfg.Input.RepoBranchesFile, repoBranches); err != nil {
+			return nil, fmt.Errorf("save repo_branches: %w", err)
+		}
+		fmt.Printf("  Собрано %d проектов, сохранено в %s\n", len(repoBranches), cfg.Input.RepoBranchesFile)
+		data, _ := json.MarshalIndent(repoBranches, "  ", "  ")
+		fmt.Printf("  %s\n", string(data))
+		fmt.Println("=== Parse завершена ===")
+		return repoBranches, nil
+
+	case modeProject:
+		projects, err := parse.LoadProjects(cfg.Input.ProjectsFile)
+		if err != nil {
+			return nil, err
+		}
+		return resolveProjectScope(projects, scope.project, scope.branches)
+
+	default: // modeByJSON
+		return parse.LoadRepoBranches(cfg.Input.RepoBranchesFile)
+	}
+}
+
 func main() {
-	configPath := flag.String("config", "config.yaml", "path to config file")
+	configPath := flag.String("config", config.DefaultPath(), "path to config file")
+	jsonStdout := flag.Bool("stdout", false, "печатать JSON-отчёт в stdout вместо файла; остальной вывод уходит в stderr")
+	var flags scopeFlags
+	flags.register(flag.CommandLine)
+	flag.Usage = usageFor(flag.CommandLine)
 	flag.Parse()
+
+	// Область анализа проверяется до конфига, MongoDB и GitHub —
+	// неверная комбинация флагов падает без побочных эффектов.
+	scope, err := flags.validate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n\n", err)
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	// В режиме --stdout поток stdout принадлежит отчёту: всё человекочитаемое,
+	// включая прогресс-бары и log, уходит в stderr, чтобы вывод можно было пайпить.
+	var reportOut io.Writer
+	if *jsonStdout {
+		reportOut = os.Stdout
+		os.Stdout = os.Stderr
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	if cfg.DeprecatedSkipParse != nil {
+		log.Printf("Ключ конфига skip_parse устарел и на запуск не влияет: "+
+			"точку входа задают флаги --by-log / --by-json (сейчас %s)", scope.mode.name())
 	}
 
 	token := os.Getenv("GITHUB_TOKEN")
@@ -99,41 +165,24 @@ func main() {
 		log.Fatalf("Failed to create output dir: %v", err)
 	}
 
-	// ========== Parse phase ==========
-	var repoBranches map[string][]string
-
-	if !cfg.SkipParse {
-		fmt.Println("\n=== Parse: Парсинг лога → repo_branches.json ===")
-		repoBranches, err = parse.ParseLog(cfg.Input.LogFile, cfg.Input.IgnoreTasks)
-		if err != nil {
-			log.Fatalf("Parse phase failed: %v", err)
-		}
-
-		if len(repoBranches) > 0 {
-			if err := parse.SaveRepoBranches(cfg.Input.RepoBranchesFile, repoBranches); err != nil {
-				log.Fatalf("Failed to save repo_branches: %v", err)
-			}
-			fmt.Printf("  Собрано %d проектов, сохранено в %s\n", len(repoBranches), cfg.Input.RepoBranchesFile)
-			data, _ := json.MarshalIndent(repoBranches, "  ", "  ")
-			fmt.Printf("  %s\n", string(data))
-		} else {
-			fmt.Println("  Не удалось извлечь данные из лога")
-		}
-		fmt.Println("=== Parse завершена ===")
-	}
-
-	// Load repo_branches from file (in case Parse phase was skipped)
-	if repoBranches == nil {
-		repoBranches, err = parse.LoadRepoBranches(cfg.Input.RepoBranchesFile)
-		if err != nil {
-			log.Fatalf("Failed to load repo_branches: %v", err)
-		}
+	// ========== Область анализа ==========
+	repoBranches, err := resolveRepoBranches(scope, cfg)
+	if err != nil {
+		log.Fatalf("Failed to resolve scope: %v", err)
 	}
 
 	if len(repoBranches) == 0 {
 		fmt.Println("Нет проектов для анализа")
+		// stdout всегда получает валидный JSON — пустой отчёт не ломает пайп в jq.
+		if reportOut != nil {
+			if err := render.RenderJSONTo(reportOut, nil, cfg); err != nil {
+				log.Fatalf("Render phase failed: %v", err)
+			}
+		}
 		return
 	}
+
+	fmt.Printf("\nРежим: %s\nОбласть: %s\n", scope.mode.name(), formatRepoBranches(repoBranches))
 
 	// ========== Collect → Analyze → Enrich per repo/branch ==========
 	fmt.Println("\n=== Collect → Analyze → Enrich ===")
@@ -249,9 +298,9 @@ func main() {
 	}
 
 	// ========== Render phase ==========
-	if len(allResults) > 0 {
+	if len(allResults) > 0 || reportOut != nil {
 		fmt.Println("\n=== Render: Генерация отчётов ===")
-		if err := render.RenderAll(allResults, cfg); err != nil {
+		if err := render.RenderAll(allResults, cfg, reportOut); err != nil {
 			log.Fatalf("Render phase failed: %v", err)
 		}
 		fmt.Println("=== Render завершена ===")

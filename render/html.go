@@ -1,6 +1,7 @@
 package render
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -13,6 +14,9 @@ import (
 	"release-engineer-helper/config"
 	"release-engineer-helper/internal/models"
 )
+
+//go:embed report.html.tmpl
+var templateFS embed.FS
 
 // RenderHTML generates the HTML report for a single repo/branch.
 func RenderHTML(r models.RepoResult, cfg *config.Config) error {
@@ -59,10 +63,9 @@ func RenderHTML(r models.RepoResult, cfg *config.Config) error {
 	data.DetailsJSON = template.JS(strings.ReplaceAll(string(detailsJSON), "</", "<\\/"))
 
 	// Render template
-	tmplPath := filepath.Join(getTemplateDir(), "report.html.tmpl")
 	tmpl, err := template.New("report.html.tmpl").Funcs(template.FuncMap{
 		"safeHTML": func(s string) template.HTML { return template.HTML(s) },
-	}).ParseFiles(tmplPath)
+	}).ParseFS(templateFS, "report.html.tmpl")
 	if err != nil {
 		return fmt.Errorf("parse template: %w", err)
 	}
@@ -79,19 +82,6 @@ func RenderHTML(r models.RepoResult, cfg *config.Config) error {
 
 	fmt.Printf("  [render] Generated HTML: %s\n", reportPath)
 	return nil
-}
-
-func getTemplateDir() string {
-	// Template is expected next to this Go source file, or in the render/ dir of the binary
-	exe, _ := os.Executable()
-	dir := filepath.Dir(exe)
-	// Check if template exists next to executable
-	tmplPath := filepath.Join(dir, "render", "report.html.tmpl")
-	if _, err := os.Stat(tmplPath); err == nil {
-		return filepath.Join(dir, "render")
-	}
-	// Fallback: relative to working directory
-	return "render"
 }
 
 type htmlTemplateData struct {

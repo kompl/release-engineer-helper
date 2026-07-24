@@ -45,6 +45,7 @@ internal/models/     — контрактные типы фаз (CollectResult, 
 # Сборка
 make build            # go build -o bambai ./cmd/bambai
 make build-all        # + rate-limit, test-history
+make install          # + симлинк /usr/local/bin/bambai (sudo)
 
 # Тесты (герметично, live-тесты GitHub API скипаются)
 make test
@@ -54,19 +55,29 @@ make test-live        # с GITHUB_TOKEN — включая live-тесты
 make lint
 # установка линтера: go install github.com/fe3dback/go-arch-lint@latest
 
-# Запуск (требует GITHUB_TOKEN)
-GITHUB_TOKEN=ghp_xxx ./bambai --config config.yaml
+# Запуск (требует GITHUB_TOKEN). Область анализа — один из трёх режимов:
+GITHUB_TOKEN=ghp_xxx ./bambai --by-json                          # из repo_branches.json (по умолчанию)
+GITHUB_TOKEN=ghp_xxx ./bambai --by-log                           # из лога, с фазой Parse
+GITHUB_TOKEN=ghp_xxx ./bambai -p hydra-server                    # все ветки проекта из projects.json
+GITHUB_TOKEN=ghp_xxx ./bambai -p hydra-server -b master -b v6.3  # только указанные ветки
+GITHUB_TOKEN=ghp_xxx ./bambai -p hydra-server --stdout | jq      # JSON в stdout вместо файла
 
 # MongoDB (для кэша)
 docker compose up -d
 docker compose down
 ```
 
+Режимы взаимоисключающие. `-p` берётся из ключей `projects.json` (максимум один),
+`-b` повторяемый и требует `-p`; указанные ветки собираются как есть, а список в
+`projects.json` задаёт набор по умолчанию. В режиме `-p` файл `repo_branches.json`
+не читается и не перезаписывается.
+
 ## Конфигурация
 
-- `config.yaml` — основной конфиг (не коммитится, есть `config.sample.yaml`)
+- `config.yaml` — основной конфиг (не коммитится, есть `config.sample.yaml`). Без `--config` ищется в CWD, затем рядом с бинарём (симлинк разыменовывается) — поэтому пути внутри держим абсолютными
 - `GITHUB_TOKEN` — env-переменная, обязательна для запуска
-- `repo_branches.json` — входной файл со списком репо/веток для анализа
+- `repo_branches.json` — входной файл со списком репо/веток для анализа (режимы `--by-json` / `--by-log`)
+- `projects.json` — справочник всех проектов и их веток, источник для `-p`/`-b` (путь — `input.projects_file`)
 
 ## Git Commits
 
