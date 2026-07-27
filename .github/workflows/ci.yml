@@ -141,15 +141,18 @@ jobs:
             echo "No Jira key found in branch name: ${BRANCH}"
           fi
 
-      # Шаг воспроизведён из hoper дословно — это предмет правки D7 (INT-740):
-      # условие `workflow_dispatch` делает его холостым на PR-прогонах, а
-      # `github.sha` на PR-прогоне указывает на merge-ref, а не на head PR.
+      # Контекст `CI` — единственный required status check в рулсете main.
+      # Ставится на head-коммит PR, поэтому новый пуш обнуляет вердикт: гейт
+      # всегда судит именно тот коммит, который собираются влить.
+      # Шаг перекрывается кнопкой force-merge (см. force-merge.yml): commit
+      # status пишется last-write-wins, в отличие от check-run.
       - name: Set build status
-        if: always() && github.event_name == 'workflow_dispatch'
+        if: always()
         run: |
           successes=$(echo "${{ join(needs.*.result, ' ') }}" | grep -o 'success' | wc -l)
           [ "${successes}" = "1" ] && state="success" || state="failure"
           run_url="https://github.com/${{ github.event.repository.full_name }}/actions/runs/${{ github.run_id }}"
-          gh api --method POST /repos/${{ github.event.repository.full_name }}/statuses/${{ github.sha }} -f state="${state}" -f context="CI" -f target_url="${run_url}"
+          gh api --method POST /repos/${{ github.event.repository.full_name }}/statuses/${{ env.HEAD_SHA }} -f state="${state}" -f context="CI" -f target_url="${run_url}"
         env:
           GH_TOKEN: ${{ secrets.CI_STATUS_TOKEN || github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
