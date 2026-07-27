@@ -1,0 +1,155 @@
+# Упрощённая копия hoper/.github/workflows/ci.yml — стенд для INT-740.
+#
+# Перенесены принципы, от которых зависит гейт автомёржа:
+#   * имя workflow строго `CI` — бот отбирает прогоны по нему (filter_ci_workflows);
+#   * триггеры push/pull_request/workflow_dispatch на дефолтную ветку;
+#   * тяжёлая джоба сборки + отдельная `report-build-status` с `if: always()`;
+#   * вердикт считается по `join(needs.*.result, ' ')`, а не по статусу джобы;
+#   * ключ Jira извлекается из имени ветки; репорт уходит боту;
+#   * commit status с контекстом `CI` ставится шагом `Set build status`;
+#   * диагностика цепляется артефактами под `if: always()`.
+#
+# Отброшено: Oracle, сабмодули, docker-сборки, выгрузка ассетов и скриншотов,
+# сравнение с прошлым прогоном.
+#
+# Управление цветом прогона:
+#   * файл `.ci-fail` в корне — коммит красный (цвет привязан к коммиту, как в жизни);
+#   * `workflow_dispatch` с `outcome: success|failure` — ручное переопределение;
+#   * `hold_seconds` / переменная `CI_HOLD_SECONDS` — держит прогон в воздухе,
+#     чтобы воспроизвести approve при незавершённом CI.
+#
+# Внешние адреса выключены по умолчанию: репорт боту уходит, только если задана
+# переменная репозитория `BOT_BASE_URL`.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      outcome:
+        description: 'Итог сборки: repo — по маркеру .ci-fail'
+        type: choice
+        options: [repo, success, failure]
+        default: repo
+      hold_seconds:
+        description: 'Сколько секунд держать прогон в воздухе'
+        default: '0'
+
+env:
+  GO_VERSION: '1.24.6'
+
+jobs:
+  build-helper:
+    name: build release-engineer-helper
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build
+        run: go build -o bambai ./cmd/bambai
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: |
+          mkdir -p test-reports
+          set -o pipefail
+          go test -v ./... 2>&1 | tee test-reports/go-test.log
+        env:
+          GITHUB_TOKEN: ''
+
+      - name: Hold the run
+        if: ${{ inputs.hold_seconds != '' || vars.CI_HOLD_SECONDS != '' }}
+        env:
+          HOLD_SECONDS: ${{ inputs.hold_seconds || vars.CI_HOLD_SECONDS }}
+        run: |
+          seconds=$(printf '%s' "${HOLD_SECONDS}" | tr -cd '0-9')
+          echo "Holding the run for ${seconds:-0}s"
+          sleep "${seconds:-0}"
+
+      - name: Decide build outcome
+        env:
+          OUTCOME: ${{ inputs.outcome }}
+        run: |
+          case "${OUTCOME}" in
+            success)
+              echo "Forced success by workflow_dispatch input"
+              exit 0
+              ;;
+            failure)
+              echo "::error::Forced failure by workflow_dispatch input"
+              exit 1
+              ;;
+          esac
+
+          if [ -f .ci-fail ]; then
+            echo "::error::Marker .ci-fail is committed — this commit is red on purpose"
+            exit 1
+          fi
+
+          echo "No .ci-fail marker — commit is green"
+
+      - name: Attach test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.event.repository.name }}
+          path: ./test-reports/*.log
+
+  report-build-status:
+    name: report build status
+
+    if: always()
+
+    needs: [build-helper]
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      statuses: write
+
+    steps:
+      - name: Report build status
+        if: always()
+        env:
+          BOT_BASE_URL: ${{ vars.BOT_BASE_URL }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          jira_key=$(echo "${BRANCH}" | grep -oE "[A-Z]+-[0-9]+" | head -n 1)
+          successes=$(echo "${{ join(needs.*.result, ' ') }}" | grep -o 'success' | wc -l)
+          [ "${successes}" = "1" ] && status="success" || status="failure"
+          if [ -z "${BOT_BASE_URL}" ]; then
+            echo "BOT_BASE_URL is not set — skipping the report (status: ${status}, branch: ${BRANCH})"
+          elif [ -n "${jira_key}" ]; then
+            curl --fail "${BOT_BASE_URL}/github/report-build-ga-finished/${jira_key}/${status}"
+            echo "Reported build status: ${status} for ${jira_key}"
+          else
+            echo "No Jira key found in branch name: ${BRANCH}"
+          fi
+
+      # Шаг воспроизведён из hoper дословно — это предмет правки D7 (INT-740):
+      # условие `workflow_dispatch` делает его холостым на PR-прогонах, а
+      # `github.sha` на PR-прогоне указывает на merge-ref, а не на head PR.
+      - name: Set build status
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: |
+          successes=$(echo "${{ join(needs.*.result, ' ') }}" | grep -o 'success' | wc -l)
+          [ "${successes}" = "1" ] && state="success" || state="failure"
+          run_url="https://github.com/${{ github.event.repository.full_name }}/actions/runs/${{ github.run_id }}"
+          gh api --method POST /repos/${{ github.event.repository.full_name }}/statuses/${{ github.sha }} -f state="${state}" -f context="CI" -f target_url="${run_url}"
+        env:
+          GH_TOKEN: ${{ secrets.CI_STATUS_TOKEN || github.token }}
