@@ -48,6 +48,11 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    # Сборке нужен только исходный код. Вердикт `CI` ставит отдельная джоба,
+    # ей и выданы права на запись статусов.
+    permissions:
+      contents: read
+
     steps:
       - uses: actions/checkout@v4
 
