@@ -1,13 +1,16 @@
 # Кнопка force-merge в PR: метка `force-merge`.
 #
-# Механика — не обход правила, а его удовлетворение. Required status check в
-# рулсете main — контекст `CI`, и это commit status, а не check-run. Статусы
-# пишутся last-write-wins, поэтому шаг ниже перекрывает вердикт CI на head-
-# коммите, и мёрж проходит штатным путём: без admin-токена, без bypass_actors,
-# без прав, которых нет у обычного коллаборатора.
+# Механика — обход рулсета целиком. Приложение GitHub Actions внесено в
+# `bypass_actors`, поэтому мёрж под `GITHUB_TOKEN` проходит независимо от
+# вердикта сборки и наличия апрува. Требуется именно обход: перезаписью
+# статуса закрывалось только одно условие из двух, и на PR без апрува кнопка
+# упиралась в правило `pull_request`.
 #
-# След остаётся в трёх местах: метка в таймлайне PR, описание статуса с именем
-# нажавшего, и комментарий с реальным вердиктом CI на момент перекрытия.
+# Плата за это — обход получает не кнопка, а весь `GITHUB_TOKEN` репозитория:
+# любой воркфлоу здесь способен влить в main мимо правил. Гранулярнее GitHub не
+# умеет, bypass выдаётся актору, а не воркфлоу. Поэтому единственный барьер —
+# право править `.github/workflows`, и поэтому же аудит ниже обязателен: следа
+# в виде перекрытого статуса больше не остаётся.
 #
 # `pull_request_target` даёт токен на запись и берёт workflow из базовой ветки;
 # код PR здесь не выкачивается и не исполняется.
@@ -20,7 +23,6 @@ on:
 
 permissions:
   contents: write
-  statuses: write
   pull-requests: write
 
 jobs:
@@ -52,32 +54,27 @@ jobs:
               ;;
           esac
 
-      - name: Record the CI verdict being overridden
+      # Единственный след того, что именно обошли: статус больше не
+      # перезаписывается, так что вердикт фиксируется только здесь.
+      - name: Record what is being bypassed
         run: |
           verdict=$(gh api "/repos/${REPO}/commits/${HEAD_SHA}/status" --jq '.state')
+          review=$(gh pr view "${PR_NUMBER}" -R "${REPO}" --json reviewDecision --jq '.reviewDecision // "—"')
           checks=$(gh api "/repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
             --jq '[.check_runs[] | "\(.name): \(.status)/\(.conclusion // "—")"] | join("\n")')
-          echo "OVERRIDDEN_VERDICT=${verdict}" >> $GITHUB_ENV
           {
             echo "**Force merge** by @${ACTOR}"
             echo
-            echo "Состояние на head-коммите \`${HEAD_SHA}\` в момент перекрытия — \`${verdict}\`:"
+            echo "Правила рулсета обойдены на head-коммите \`${HEAD_SHA}\`."
+            echo "Вердикт сборки — \`${verdict}\`, ревью — \`${review}\`."
             echo
             echo '```'
             echo "${checks}"
             echo '```'
             echo
-            echo "[Прогон, выполнивший перекрытие](${RUN_URL})"
+            echo "[Прогон, выполнивший обход](${RUN_URL})"
           } > comment.md
           gh pr comment "${PR_NUMBER}" -R "${REPO}" --body-file comment.md
-
-      - name: Override the CI status
-        run: |
-          gh api --method POST "/repos/${REPO}/statuses/${HEAD_SHA}" \
-            -f state="success" \
-            -f context="CI" \
-            -f description="force-merged by @${ACTOR} (was: ${OVERRIDDEN_VERDICT})" \
-            -f target_url="${RUN_URL}"
 
       # GitHub изредка отвечает «Base branch was modified» на мутацию, которая
       # уже прошла: PR влит, а мёрж-запрос вернул ошибку из-за устаревшего кэша
