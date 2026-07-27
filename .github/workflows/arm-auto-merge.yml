@@ -1,0 +1,39 @@
+# Взвод авто-мёржа на каждый PR — без нажатия кнопки.
+#
+# GitHub умеет вливать PR сам, когда сойдутся все условия рулсета, но включить
+# это на репозиторий целиком нельзя: настройка `allow_auto_merge` лишь
+# разрешает кнопку. Воркфлоу нажимает её за автора.
+#
+# Момент выбран так, чтобы PR был заведомо заблокирован: на `opened` вердикт
+# `CI` ещё не выставлен, апрува нет. Если бы PR уже был мержабелен, `--auto`
+# влил бы его немедленно.
+#
+# Дальше решает GitHub: авто-мёрж сработает ровно тогда, когда станут зелёными
+# required-контекст `CI` и апрув. Ни один из них этот воркфлоу не подменяет.
+
+name: Arm auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  arm:
+    name: arm auto-merge
+
+    if: '!github.event.pull_request.draft'
+
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ secrets.CI_STATUS_TOKEN || github.token }}
+      REPO: ${{ github.event.repository.full_name }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Enable auto-merge
+        run: gh pr merge "${PR_NUMBER}" -R "${REPO}" --auto --rebase
