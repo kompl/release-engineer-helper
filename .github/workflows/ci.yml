@@ -43,10 +43,61 @@ env:
   GO_VERSION: '1.24.6'
 
 jobs:
+  # Нажимает «Enable auto-merge» за автора: настройки «взводить на все PR» у
+  # GitHub нет, `allow_auto_merge` лишь разрешает кнопку. Ничего не решает —
+  # вливать или нет, определяют рулсет и вердикт `CI` ниже.
+  #
+  # Пропускается там, где взвод невозможен или бессмыслен: у форк-PR токен
+  # read-only, черновику GitHub взвод запрещает, вне PR взводить нечего.
+  arm-auto-merge:
+    name: arm auto-merge
+
+    if: >-
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      GH_TOKEN: ${{ secrets.CI_STATUS_TOKEN || github.token }}
+      REPO: ${{ github.event.repository.full_name }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      # Джоба повторяется на каждый push в ветку, поэтому «уже взведён» —
+      # штатный исход, а не ошибка.
+      - name: Enable auto-merge
+        run: |
+          if gh pr merge "${PR_NUMBER}" -R "${REPO}" --auto --rebase; then
+            exit 0
+          fi
+
+          state=$(gh pr view "${PR_NUMBER}" -R "${REPO}" \
+            --json state,autoMergeRequest --jq '"\(.state) \(.autoMergeRequest != null)"')
+          echo "PR state: ${state}"
+
+          case "${state}" in
+            'MERGED '*) echo "PR уже влит"; exit 0 ;;
+            'OPEN true') echo "Авто-мёрж уже взведён"; exit 0 ;;
+          esac
+
+          echo "::error::Не удалось взвести авто-мёрж"
+          exit 1
+
   build-helper:
     name: build release-engineer-helper
 
     runs-on: ubuntu-latest
+
+    # Сборке нужен только исходный код: вердикт `CI` ставит отдельная джоба,
+    # ей и выданы права на запись статусов.
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
