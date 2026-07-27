@@ -79,5 +79,21 @@ jobs:
             -f description="force-merged by @${ACTOR} (was: ${OVERRIDDEN_VERDICT})" \
             -f target_url="${RUN_URL}"
 
+      # GitHub изредка отвечает «Base branch was modified» на мутацию, которая
+      # уже прошла: PR влит, а мёрж-запрос вернул ошибку из-за устаревшего кэша
+      # мержабельности. Верим состоянию PR, а не коду возврата.
       - name: Merge pull request
-        run: gh pr merge "${PR_NUMBER}" -R "${REPO}" --rebase
+        run: |
+          if gh pr merge "${PR_NUMBER}" -R "${REPO}" --rebase; then
+            exit 0
+          fi
+
+          state=$(gh pr view "${PR_NUMBER}" -R "${REPO}" --json state --jq '.state')
+
+          if [ "${state}" = "MERGED" ]; then
+            echo "Мёрж-запрос вернул ошибку, но PR уже влит — считаем шаг успешным"
+            exit 0
+          fi
+
+          echo "::error::Merge failed, PR state: ${state}"
+          exit 1
